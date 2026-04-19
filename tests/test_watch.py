@@ -175,8 +175,46 @@ def test_render_subtitle_includes_all_bits():
     )
     assert "pressure" in sub
     assert "warn" in sub
-    assert "every 3s / 15s" in sub
+    assert "3s/15s" in sub
     assert "dry-run" in sub
+
+
+def test_render_subtitle_embeds_host_and_battery_when_provided():
+    from cooldown.collectors.battery import BatteryStats
+    from cooldown.collectors.hostinfo import HostInfo
+
+    host = HostInfo(
+        model="MacBook Pro",
+        chip="Apple M1 Max",
+        gpu_cores=32,
+        perf_cores=8,
+        eff_cores=2,
+        ram_bytes=64 * 1024 ** 3,
+        disk_total_bytes=2 * 1024 ** 4,
+        macos_version="15.2",
+    )
+    batt = BatteryStats(
+        percent=82.0, cycle_count=100, temp_c=41.5, health_percent=90.0,
+        condition=None, charging=True, ac_attached=True, power_w=18.5,
+        minutes_remaining=42, design_capacity_mah=6000,
+        max_capacity_mah=5400, fully_charged=False,
+    )
+    sub = watch.render_subtitle(
+        mem=None, sys_stats=None, therm=None, procs=None,
+        last_op=None, fast_interval=3, slow_interval=15,
+        paused=False, dry_run=False,
+        host=host, battery=batt,
+    )
+    # Machine identity string appears.
+    assert "MacBook Pro" in sub
+    assert "M1 Max" in sub
+    assert "32GPU" in sub
+    assert "8P+2E" in sub
+    assert "64G/2.0T" in sub
+    assert "macOS 15.2" in sub
+    # Hot-battery indicator is colored red (>=40°C triggers bold red).
+    assert "41.5" in sub
+    assert "bold red" in sub
 
 
 # ---------------------------------------------------------------------------

@@ -48,7 +48,9 @@ from typing import Any
 
 from rich.console import Console
 
+from ..collectors import battery as batt_mod
 from ..collectors import dev as dev_mod
+from ..collectors import hostinfo as host_mod
 from ..collectors import memory as mem_mod
 from ..collectors import ports as ports_mod
 from ..collectors import procs as procs_mod
@@ -58,6 +60,7 @@ from ..collectors.procs import ProcInfo
 from ..safety.oplog import LOG_PATH
 from ..util import human_bytes, human_duration
 from .dashboard import (
+    _battery_content,
     _cpu_content,
     _health_score,
     _mem_content,
@@ -206,7 +209,8 @@ def _last_oplog_entry(max_bytes: int = 4096) -> tuple[str, float] | None:
 
 
 # ---------------------------------------------------------------------------
-# Health subtitle (pure string formatter, keeps the widget layer thin)
+# Dense single-line header (mo status-inspired) — crams machine identity,
+# health score, key thermal metrics, and live tick cadence into one row.
 # ---------------------------------------------------------------------------
 
 def render_subtitle(
@@ -220,24 +224,62 @@ def render_subtitle(
     slow_interval: int,
     paused: bool,
     dry_run: bool,
+    host: host_mod.HostInfo | None = None,
+    battery: batt_mod.BatteryStats | None = None,
 ) -> str:
     bits: list[str] = []
+
+    # 1. Health dot (lights up the eye first).
     if mem and sys_stats and therm:
         score, color = _health_score(mem, sys_stats, therm)
         bits.append(f"Health [{color}]●{score}[/]")
+
+    # 2. Machine identity: model · chip · topology · RAM/Disk · macOS.
+    if host is not None:
+        chip = host.chip.replace("Apple ", "")
+        gpu = f", {host.gpu_cores}GPU" if host.gpu_cores else ""
+        ram_gb = host.ram_bytes / 1024 / 1024 / 1024
+        disk_tb = host.disk_total_bytes / 1024 ** 4
+        bits.append(
+            f"[cyan]{host.model}[/] · [yellow]{chip}{gpu}[/] [dim]{host.topology}[/] "
+            f"· {ram_gb:.0f}G/{disk_tb:.1f}T · macOS {host.macos_version}"
+        )
+
+    # 3. Uptime.
+    if sys_stats:
+        bits.append(f"up [dim]{human_duration(sys_stats.uptime)}[/]")
+
+    # 4. Battery temp (not AC state — temp is the thermal-management signal).
+    if battery and battery.temp_c is not None:
+        t = battery.temp_c
+        tc = "bold red" if t >= 40 else "yellow" if t >= 35 else "green"
+        tail = ""
+        if battery.percent is not None:
+            tail = f" [dim]{battery.percent:.0f}%[/]"
+            if battery.charging:
+                tail += " [dim green]⚡[/]"
+        bits.append(f"batt [{tc}]{t:.1f}°C[/]{tail}")
+
+    # 5. Memory pressure (explicit label so it's scannable).
     if mem:
         lvl = mem.pressure_level or "?"
         lvl_color = {
             "normal": "green", "warn": "yellow", "critical": "bold red"
         }.get(lvl, "dim")
         bits.append(f"pressure [{lvl_color}]{lvl}[/]")
+
+    # 6. AI CLI fleet size.
     if procs is not None:
         bits.append(f"CLIs [cyan]{len(procs)}[/]")
+
+    # 7. Last operation echo (dims older entries).
     if last_op:
         action, ts = last_op
         ago = max(0, time.time() - ts)
-        bits.append(f"last op [dim]{action}[/] ([dim]{human_duration(ago)} ago[/])")
-    bits.append(f"[dim]every {fast_interval}s / {slow_interval}s[/]")
+        bits.append(f"last [dim]{action}[/] [dim]{human_duration(ago)} ago[/]")
+
+    # 8. Tick cadence + state flags.
+    bits.append(f"[dim]⟳ {fast_interval}s/{slow_interval}s[/]")
     if paused:
         bits.append("[yellow]paused[/]")
     if dry_run:
@@ -274,7 +316,7 @@ def _build_app_class():
 
         #body {
             layout: grid;
-            grid-size: 2 3;
+            grid-size: 2 4;
             grid-gutter: 0 1;
             padding: 0 1;
             height: 1fr;
@@ -294,6 +336,12 @@ def _build_app_class():
         }
         DataTable:focus.panel {
             border: thick $accent;
+        }
+
+        /* Ports gets the full bottom row — wide tables read much better
+           than narrow ones when attribution columns pile up. */
+        #ports {
+            column-span: 2;
         }
         """
 
@@ -326,6 +374,8 @@ def _build_app_class():
             self._mem: mem_mod.MemoryStats | None = None
             self._sys: sys_mod.SystemStats | None = None
             self._therm: therm_mod.ThermalStats | None = None
+            self._batt: batt_mod.BatteryStats | None = None
+            self._host: host_mod.HostInfo | None = None
             self._procs: list[ProcInfo] | None = None
             self._ai_rows: list[AiRow] = []
             self._project_rows: list[ProjectRow] = []
@@ -343,13 +393,15 @@ def _build_app_class():
             mem.border_title = "Memory"
             therm = Static("[dim]sampling…[/]", id="thermal", classes="panel")
             therm.border_title = "Thermal"
+            batt = Static("[dim]sampling…[/]", id="battery", classes="panel")
+            batt.border_title = "Battery"
             ai = DataTable(id="ai", classes="panel", cursor_type="row", zebra_stripes=True)
             ai.border_title = "AI CLI Inventory  [dim](focus + k = reap)[/]"
             proj = DataTable(id="projects", classes="panel", cursor_type="row", zebra_stripes=True)
             proj.border_title = "Top Projects by RSS"
             ports = DataTable(id="ports", classes="panel", cursor_type="row", zebra_stripes=True)
             ports.border_title = "Listening Ports"
-            yield Grid(cpu, mem, therm, ai, proj, ports, id="body")
+            yield Grid(cpu, mem, therm, batt, ai, proj, ports, id="body")
             yield Footer()
 
         # ---------------------------------------------------------- mount
@@ -361,6 +413,13 @@ def _build_app_class():
             proj.add_columns("project", "#", "rss", "langs", "launchers")
             ports: DataTable = self.query_one("#ports", DataTable)
             ports.add_columns("port", "proto", "pid", "process", "project", "launcher")
+
+            # Host identity is immutable — read it once at startup so the
+            # header can render it without a per-tick subprocess spawn.
+            try:
+                self._host = host_mod.collect()
+            except Exception:  # noqa: BLE001
+                self._host = None
 
             self._reset_fast_timer()
             self._reset_slow_timer()
@@ -411,6 +470,11 @@ def _build_app_class():
                 self.call_from_thread(self._apply_thermal, therm)
             except Exception as exc:  # noqa: BLE001
                 self.call_from_thread(self._set_error, "thermal", exc)
+            try:
+                batt = batt_mod.collect()
+                self.call_from_thread(self._apply_battery, batt)
+            except Exception as exc:  # noqa: BLE001
+                self.call_from_thread(self._set_error, "battery", exc)
             try:
                 procs = procs_mod.collect(sample_interval=0.1)
                 procs_mod.enrich_idle(procs)
@@ -472,6 +536,12 @@ def _build_app_class():
             self._therm = therm
             self._updated["thermal"] = time.time()
             self.query_one("#thermal", Static).update(_thermal_content(therm))
+            self._refresh_subtitle()
+
+        def _apply_battery(self, batt: batt_mod.BatteryStats | None) -> None:
+            self._batt = batt
+            self._updated["battery"] = time.time()
+            self.query_one("#battery", Static).update(_battery_content(batt))
             self._refresh_subtitle()
 
         def _apply_ai(self, procs: list[ProcInfo], rows: list[AiRow]) -> None:
@@ -560,6 +630,8 @@ def _build_app_class():
                 slow_interval=self.slow_interval,
                 paused=self.paused,
                 dry_run=self.dry_run,
+                host=self._host,
+                battery=self._batt,
             )
             with contextlib.suppress(Exception):
                 self.query_one("#healthbar", Static).update(markup)

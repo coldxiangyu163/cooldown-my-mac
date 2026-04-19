@@ -10,6 +10,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from ..collectors import battery as batt_mod
 from ..collectors import memory as mem_mod
 from ..collectors import procs as procs_mod
 from ..collectors import system as sys_mod
@@ -37,21 +38,50 @@ def _kv(rows: list[tuple[str, str]]) -> Table:
 
 
 def _cpu_content(sys_stats: sys_mod.SystemStats) -> Table:
-    """Inner CPU content (no outer Panel). Shared with `cool watch`."""
+    """Inner CPU content (no outer Panel). Shared with `cool watch`.
+
+    Per-core breakdown is the headline so the user can spot a single
+    runaway core immediately — a 95% P-core inside a 48% average is the
+    signature of a thermal bottleneck and wouldn't surface from the total
+    alone.
+    """
+    from ..collectors import hostinfo  # local import: breaks circular edge
     pct = sys_stats.cpu_percent
     color = _pct_color(pct)
-    return _kv(
-        [
-            ("Total", f"[{color}]{bar(pct)} {pct:5.1f}%[/]"),
-            (
-                "Load",
-                f"{sys_stats.load_1:.2f} / {sys_stats.load_5:.2f} / {sys_stats.load_15:.2f}"
-                f"  ({sys_stats.cpu_count_logical} cores)",
-            ),
-            ("Uptime", human_duration(sys_stats.uptime)),
-            ("Processes", str(sys_stats.total_processes)),
-        ]
-    )
+    rows: list[tuple[str, str]] = [
+        ("Total", f"[{color}]{bar(pct)} {pct:5.1f}%[/]"),
+    ]
+    host = hostinfo.collect()
+    per = sys_stats.per_cpu
+    if per:
+        p_end = min(host.perf_cores or len(per), len(per))
+        if p_end:
+            p_avg = sum(per[:p_end]) / p_end
+            p_max = max(per[:p_end])
+            rows.append((
+                "P-cores",
+                f"[{_pct_color(p_avg)}]{bar(p_avg)} avg {p_avg:4.1f}%[/]  "
+                f"max [{_pct_color(p_max)}]{p_max:4.1f}%[/]  "
+                f"(×{p_end})",
+            ))
+        if p_end < len(per):
+            e = per[p_end:]
+            e_avg = sum(e) / len(e)
+            e_max = max(e)
+            rows.append((
+                "E-cores",
+                f"[{_pct_color(e_avg)}]{bar(e_avg)} avg {e_avg:4.1f}%[/]  "
+                f"max [{_pct_color(e_max)}]{e_max:4.1f}%[/]  "
+                f"(×{len(e)})",
+            ))
+    rows.append((
+        "Load",
+        f"{sys_stats.load_1:.2f} / {sys_stats.load_5:.2f} / {sys_stats.load_15:.2f}"
+        + (f"  [dim]{sys_stats.topology}[/]" if sys_stats.topology else ""),
+    ))
+    rows.append(("Uptime", human_duration(sys_stats.uptime)))
+    rows.append(("Processes", str(sys_stats.total_processes)))
+    return _kv(rows)
 
 
 def _cpu_panel(sys_stats: sys_mod.SystemStats) -> Panel:
@@ -128,6 +158,66 @@ def _thermal_content(t: therm_mod.ThermalStats) -> Table:
 def _thermal_panel(t: therm_mod.ThermalStats) -> Panel:
     return Panel(
         _thermal_content(t), title="[bold]Thermal / Power[/]", box=SIMPLE, border_style="red"
+    )
+
+
+def _battery_content(b: batt_mod.BatteryStats | None) -> Table:
+    """Battery cell details — capacity, cycles, temp, charge state.
+
+    Temperature belongs on the *first line* here rather than in Thermal
+    because cell temperature is what actually wears the battery out and is
+    what users on 'cool-down-my-mac' typically care about when the laptop
+    gets hot.
+    """
+    if b is None:
+        return _kv([("Battery", "[dim]not present[/]")])
+
+    rows: list[tuple[str, str]] = []
+    if b.percent is not None:
+        color = "green" if b.percent >= 40 else "yellow" if b.percent >= 15 else "bold red"
+        pct_cell = f"[{color}]{bar(b.percent)} {b.percent:5.1f}%[/]"
+        if b.fully_charged:
+            pct_cell += "  [dim green]charged[/]"
+        elif b.charging:
+            pct_cell += "  [dim green]charging[/]"
+        elif b.ac_attached:
+            pct_cell += "  [dim]on AC[/]"
+        else:
+            pct_cell += "  [dim yellow]on battery[/]"
+        rows.append(("Level", pct_cell))
+
+    if b.temp_c is not None:
+        temp_color = (
+            "bold red" if b.temp_c >= 40 else "yellow" if b.temp_c >= 35 else "green"
+        )
+        rows.append(("Temp", f"[{temp_color}]{b.temp_c:.1f}°C[/]"))
+
+    if b.health_percent is not None:
+        h = b.health_percent
+        h_color = "green" if h >= 85 else "yellow" if h >= 70 else "bold red"
+        rows.append(("Health", f"[{h_color}]{h:.1f}%[/]"))
+
+    if b.cycle_count is not None:
+        # Apple rates most batteries for 1000 cycles — warn past 800.
+        c_color = "green" if b.cycle_count < 600 else "yellow" if b.cycle_count < 900 else "bold red"
+        rows.append(("Cycles", f"[{c_color}]{b.cycle_count}[/]"))
+
+    bits: list[str] = []
+    if b.power_w is not None and abs(b.power_w) > 0.05:
+        sign = "+" if b.charging and b.power_w > 0 else ""
+        bits.append(f"{sign}{b.power_w:.1f}W")
+    if b.minutes_remaining is not None:
+        h, m = divmod(b.minutes_remaining, 60)
+        bits.append(f"{h}h{m:02d}m" if h else f"{m}m")
+    if bits:
+        rows.append(("Flow", "  ·  ".join(bits)))
+
+    return _kv(rows)
+
+
+def _battery_panel(b: batt_mod.BatteryStats | None) -> Panel:
+    return Panel(
+        _battery_content(b), title="[bold]Battery[/]", box=SIMPLE, border_style="green"
     )
 
 
