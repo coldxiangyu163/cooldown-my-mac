@@ -65,9 +65,12 @@ def test_group_by_project_sorts_by_rss(tmp_path: Path):
     ]
     groups = dev_mod.group_by(devs, "project")
     order = list(groups.keys())
-    # beta has 900 total, alpha 100, unknown 50 → beta first.
+    # beta has 900 total, alpha 100, unattributed 50 → beta first.
     assert order[0] == "beta"
-    assert order[-1] == "(cwd unknown)"
+    # Project=None falls through to the "(background: ...)" bucket rather
+    # than "(cwd unknown)" to guarantee the Top Projects panel has no
+    # anonymous row.
+    assert order[-1].startswith("(background:")
     # Inside beta, order by -rss
     assert [d.pid for d in groups["beta"]] == [2, 3]
 
@@ -229,3 +232,107 @@ def test_is_self_excludes_cool_cli():
     assert dev_mod._is_self("python3", "python3 -m cooldown.cli dev")
     assert dev_mod._is_self("cool", "/Users/x/.venv/bin/cool dev")
     assert not dev_mod._is_self("node", "node server.js")
+
+
+# ---------------------------------------------------------------------------
+# Regression: 2026-04-19 part 2 — "(cwd unknown)" was not fully eliminated
+# after the first pass: npx cache / VS Code extensions / stale-cwd ghosts
+# still fell through. These fixtures pin every fallback synthesizer and the
+# "(cwd unknown)" → never-emitted invariant.
+# ---------------------------------------------------------------------------
+
+def test_synthesize_npx_from_cache_path():
+    proj = dev_mod._synthesize_npx_project(
+        "/opt/homebrew/Cellar/node/23.11.0/bin/node "
+        "/Users/me/.npm/_npx/15c61037b1978c83/node_modules/chrome-devtools-mcp/dist/index.js"
+    )
+    assert proj is not None
+    assert proj.name == "(npx: chrome-devtools-mcp)"
+
+
+def test_synthesize_npx_from_npm_exec():
+    proj = dev_mod._synthesize_npx_project(
+        "npm exec @modelcontextprotocol/server-sequential-thinking"
+    )
+    assert proj is not None
+    assert proj.name == "(npx: @modelcontextprotocol/server-sequential-thinking)"
+
+
+def test_synthesize_npx_ignores_regular_node_cmdline():
+    assert dev_mod._synthesize_npx_project("node /Users/me/project/server.js") is None
+
+
+def test_synthesize_vscode_extension():
+    proj = dev_mod._synthesize_vscode_ext_project(
+        "/Users/me/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-darwin-arm64/"
+        "python-env-tools/bin/pet",
+        cwd="/",
+    )
+    assert proj is not None
+    assert "vscode" in proj.name.lower()
+    assert "python-envs" in proj.name
+
+
+def test_synthesize_cwd_from_deleted_monorepo_path():
+    # Path does not exist on disk (stale cwd of a long-running process)
+    # but we can still fold it to the workspace root from the string.
+    proj = dev_mod._synthesize_cwd_project(
+        "/Users/me/personal/project/music-train-ui-saas/apps/web"
+    )
+    assert proj is not None
+    assert proj.name == "music-train-ui-saas"
+
+
+def test_synthesize_cwd_folds_packages_up():
+    proj = dev_mod._synthesize_cwd_project(
+        "/Users/me/code/my-repo/packages/ui"
+    )
+    assert proj is not None
+    assert proj.name == "my-repo"
+
+
+def test_synthesize_cwd_hidden_tool_dir():
+    proj = dev_mod._synthesize_cwd_project("/Users/me/.mcporter")
+    assert proj is not None
+    assert proj.name == "(tool: mcporter)"
+
+
+def test_synthesize_cwd_ignores_root_and_empty():
+    assert dev_mod._synthesize_cwd_project(None) is None
+    assert dev_mod._synthesize_cwd_project("/") is None
+    assert dev_mod._synthesize_cwd_project("") is None
+
+
+def test_synthesize_cmdline_project_from_dir_flag():
+    proj = dev_mod._synthesize_cmdline_project(
+        "node /opt/homebrew/bin/pnpm --dir /Users/me/work/acme/pkg --filter api dev"
+    )
+    assert proj is not None
+    # Falls back to cwd_project parser which uses the "work" anchor.
+    assert proj.name == "acme"
+
+
+def test_group_key_never_emits_cwd_unknown():
+    # A dev proc with project=None should fall back to (background: <proc>),
+    # not the old "(cwd unknown)" sentinel.
+    dev = _mk(1, project=None)
+    dev.cmdline = "/opt/homebrew/bin/rogue-tool --flag"
+    key = dev_mod._group_key(dev, "project")
+    assert "cwd unknown" not in key
+    assert key.startswith("(background:")
+
+
+def test_walk_past_monorepo_folds_apps_web_up(tmp_path: Path):
+    # Simulate a pnpm-style monorepo: repo/.git + repo/apps/web/package.json.
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "apps" / "web").mkdir(parents=True)
+    (repo / "apps" / "web" / "package.json").write_text("{}")
+    # find_root from inside apps/web would find the inner package.json first.
+    inner = Project(
+        root=repo / "apps" / "web", name="web", markers=["package.json"]
+    )
+    outer = dev_mod._walk_past_monorepo(inner)
+    # Must climb past the ``apps`` layer and land on the workspace root.
+    assert outer.root == repo
+    assert outer.name == "repo"

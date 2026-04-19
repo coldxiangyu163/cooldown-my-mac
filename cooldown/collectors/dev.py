@@ -200,6 +200,225 @@ def _classify_framework(lang: str, cmdline: str) -> str | None:
 
 _APP_BUNDLE_RE = re.compile(r"/([^/]+?)\.app/")
 
+# ---------------------------------------------------------------------------
+# Additional attribution sources for processes that would otherwise land in
+# "(cwd unknown)". Applied in order after find_root + _synthesize_app_project
+# so on-disk markers always win.
+# ---------------------------------------------------------------------------
+
+# npx / npm global cache: /Users/.../.npm/_npx/<hash>/node_modules/<pkg>/...
+_NPX_CACHE_RE = re.compile(r"/\.npm/_npx/[0-9a-f]+/node_modules/((?:@[^/\s]+/)?[^/\s]+)")
+# Fallback for live shells — "npm exec <pkg>" or "npx <pkg>".
+_NPM_EXEC_RE = re.compile(r"(?:^|\s)(?:npx|npm\s+exec)(?:\s+-\S+)*\s+((?:@[^/\s]+/)?[^\s@]+)")
+
+# VS Code extensions:
+# /Users/<u>/.vscode/extensions/<publisher>.<name>-<version>[-arch]/...
+_VSCODE_EXT_RE = re.compile(
+    r"/\.vscode(?:-[a-z]+)?/extensions/([^./]+)\.([^/\s-]+(?:-[^/\s-]+)*?)-\d[\w.]*"
+)
+
+# Known "project container" anchors inside a user's filesystem layout. If cwd
+# walks through one of these, the *next* segment is the project name even
+# when the directory has already been deleted (stale cwd of long-running
+# processes).
+_PROJECT_ANCHORS: tuple[tuple[str, ...], ...] = (
+    ("personal", "project"),
+    ("personal", "projects"),
+    ("work",),
+    ("code",),
+    ("src",),
+    ("repos",),
+    ("workspace",),
+    ("projects",),
+    ("dev",),
+    ("Documents", "GitHub"),
+    ("go", "src"),
+)
+
+# Monorepo subdirectories — when cwd is `<repo>/apps/web`, the bucket is the
+# <repo>, not "web".
+_MONOREPO_SUBDIRS = frozenset({
+    "apps", "app", "packages", "services", "libs", "lib", "modules",
+    "frontend", "backend", "web", "server", "client",
+})
+
+
+def _walk_past_monorepo(proj: Project) -> Project:
+    """If a project root sits inside a monorepo layer (``apps/<x>``,
+    ``packages/<x>``, ...), walk up past that layer to find the workspace
+    root so ``my-repo/apps/web`` and ``my-repo/apps/api`` collapse into
+    ``my-repo`` instead of each becoming its own ``web`` / ``api`` bucket.
+    """
+    root = proj.root
+    try:
+        parent = root.parent
+        grand = parent.parent
+    except (AttributeError, OSError):
+        return proj
+    if parent.name not in _MONOREPO_SUBDIRS:
+        return proj
+    if grand == parent:
+        return proj
+    outer = project_mod.find_root(grand, max_depth=1)
+    if outer is not None:
+        return outer
+    # Even without markers, synthesise the workspace bucket from the path.
+    return Project(root=grand, name=grand.name, markers=["<monorepo>"])
+
+
+def _synthesize_npx_project(cmdline: str) -> Project | None:
+    """Attribute npx-cache / `npm exec <pkg>` to ``(npx: <pkg>)``."""
+    if not cmdline:
+        return None
+    m = _NPX_CACHE_RE.search(cmdline)
+    if m:
+        pkg = m.group(1)
+        return Project(
+            root=Path("/"), name=f"(npx: {pkg})", markers=["<npx>"]
+        )
+    m = _NPM_EXEC_RE.search(cmdline)
+    if m:
+        pkg = m.group(1)
+        return Project(
+            root=Path("/"), name=f"(npx: {pkg})", markers=["<npx>"]
+        )
+    return None
+
+
+def _synthesize_vscode_ext_project(cmdline: str, cwd: str | None) -> Project | None:
+    """Attribute VS Code / Cursor extension child procs to ``(vscode: <ext>)``."""
+    for source in (cmdline or "", cwd or ""):
+        if not source:
+            continue
+        m = _VSCODE_EXT_RE.search(source)
+        if m:
+            ext_name = m.group(2)
+            return Project(
+                root=Path("/"), name=f"(vscode: {ext_name})", markers=["<ext>"]
+            )
+    return None
+
+
+def _synthesize_cwd_project(cwd: str | None) -> Project | None:
+    """Parse a cwd *string* into a project bucket even when the directory
+    no longer exists on disk.
+
+    Long-running dev processes frequently outlive ``git clone`` paths —
+    the user deletes / moves the tree, the kernel keeps the inode, and
+    the cwd is now a ghost. We still know the original path so we can
+    reconstruct the project name by pattern-matching against common
+    "project container" layouts under ``$HOME``.
+
+    Also folds known monorepo subdirs (``apps/web`` etc.) up so
+    ``~/code/my-repo/apps/web`` and ``~/code/my-repo/packages/ui`` both
+    attribute to ``my-repo`` rather than ``web`` / ``ui``.
+    """
+    if not cwd:
+        return None
+    # Tolerate Path(str) failing on non-UTF-8 or gibberish.
+    try:
+        p = Path(cwd)
+    except (OSError, ValueError):
+        return None
+    if str(p) in ("/", ".", ""):
+        return None
+    parts = p.parts
+
+    # 1. Try matching each known "project container" anchor relative to $HOME.
+    # macOS user homes live under /Users/<name>/; Linux under /home/<name>/.
+    # Accept both the current process's $HOME *and* the generic pattern so
+    # foreign-owned procs (and unit tests) resolve correctly.
+    home = Path.home()
+    try:
+        home_parts = home.parts
+    except AttributeError:
+        home_parts = ()
+    home_idx: int | None = None
+    # Exact current-user $HOME match first.
+    if home_parts:
+        for i in range(len(parts) - len(home_parts) + 1):
+            if tuple(parts[i:i + len(home_parts)]) == home_parts:
+                home_idx = i + len(home_parts)
+                break
+    # Fall back to generic /Users/<x>/ or /home/<x>/ anchor.
+    if home_idx is None:
+        for i in range(len(parts) - 1):
+            if parts[i] in ("Users", "home") and i + 1 < len(parts):
+                home_idx = i + 2
+                break
+    if home_idx is not None and home_idx < len(parts):
+        rest = parts[home_idx:]
+        for anchor in _PROJECT_ANCHORS:
+            if len(rest) > len(anchor) and tuple(rest[:len(anchor)]) == anchor:
+                name = rest[len(anchor)]
+                root_parts = parts[:home_idx + len(anchor) + 1]
+                return Project(
+                    root=Path(*root_parts),
+                    name=name,
+                    markers=["<cwd>"],
+                )
+
+    # 2. Fold monorepo subdirs (apps/web, packages/ui, ...) up one level.
+    # Only applies when the *containing* segment is a known subdir.
+    for i in range(len(parts) - 1, 0, -1):
+        if parts[i] in _MONOREPO_SUBDIRS and i >= 1 and i + 1 < len(parts):
+            root_parts = parts[: i]
+            if root_parts and root_parts[-1] not in ("", "/"):
+                return Project(
+                    root=Path(*root_parts),
+                    name=root_parts[-1],
+                    markers=["<monorepo>"],
+                )
+
+    # 3. Hidden tool dirs under $HOME: ~/.mcporter, ~/.nanobot/workspace
+    if home_idx is not None and home_idx < len(parts):
+        tail = parts[home_idx]
+        if tail.startswith("."):
+            tool = tail.lstrip(".")
+            return Project(
+                root=Path(*parts[:home_idx + 1]),
+                name=f"(tool: {tool})",
+                markers=["<hidden>"],
+            )
+
+    # 4. Absolute last resort: if the cwd has at least one real segment
+    # and is under $HOME, use the first subdir name.
+    if home_idx is not None and home_idx < len(parts):
+        return Project(
+            root=Path(*parts[:home_idx + 1]),
+            name=parts[home_idx],
+            markers=["<cwd>"],
+        )
+    return None
+
+
+def _synthesize_cmdline_project(cmdline: str) -> Project | None:
+    """Last-resort attribution from cmdline flags. Covers ``pnpm --dir
+    <path>`` and similar tool invocations that point at a project root
+    even when the caller's cwd is ``/``.
+    """
+    if not cmdline:
+        return None
+    for flag in ("--dir ", "--cwd ", "--prefix "):
+        idx = cmdline.find(flag)
+        if idx == -1:
+            continue
+        tail = cmdline[idx + len(flag):].strip()
+        # Support quoted or whitespace-delimited paths.
+        if tail.startswith(("'", '"')):
+            quote = tail[0]
+            end = tail.find(quote, 1)
+            if end == -1:
+                continue
+            path = tail[1:end]
+        else:
+            path = tail.split(" ", 1)[0]
+        if path:
+            proj = _synthesize_cwd_project(path)
+            if proj is not None:
+                return proj
+    return None
+
 
 def _synthesize_app_project(name: str, cmdline: str, cwd: str | None) -> Project | None:
     """Best-effort attribution for processes that have no project marker
@@ -336,12 +555,23 @@ def collect(sample_interval: float = 0.2) -> list[DevProc]:
         framework = _classify_framework(lang, cmd)
         cwd = project_mod.get_cwd(p.pid)
         proj = project_mod.find_root(cwd) if cwd else None
+        if proj is not None:
+            proj = _walk_past_monorepo(proj)
         launcher = ancestry_mod.find_launcher(p.pid)
         is_orphan = ppid == 1 and launcher.kind == "launchd"
-        # If no real on-disk project, try to attribute to an owning .app
-        # bundle (Electron helpers etc.) or bucket orphan system procs.
+        # If no real on-disk project, try progressively weaker fallbacks so
+        # that every dev process gets *some* attribution and the
+        # "(cwd unknown)" bucket stays empty.
         if proj is None:
             proj = _synthesize_app_project(name, cmd, cwd)
+        if proj is None:
+            proj = _synthesize_npx_project(cmd)
+        if proj is None:
+            proj = _synthesize_vscode_ext_project(cmd, cwd)
+        if proj is None:
+            proj = _synthesize_cmdline_project(cmd)
+        if proj is None:
+            proj = _synthesize_cwd_project(cwd)
         if proj is None:
             proj = _bucket_orphan_project(cwd, is_orphan)
 
@@ -397,7 +627,15 @@ def enrich_idle(devs: list[DevProc]) -> None:
 
 def _group_key(dev: DevProc, by: str) -> str:
     if by == "project":
-        return dev.project.name if dev.project else "(cwd unknown)"
+        if dev.project is not None:
+            return dev.project.name
+        # Ultimate fallback — we couldn't find a disk marker, an .app
+        # bundle, an npx cache, a VS Code extension, a parseable cwd, or
+        # an orphan anchor. Bucket as "(background)" keyed by the first
+        # cmdline token so related procs still cluster meaningfully.
+        head = dev.cmdline.split(" ", 1)[0] if dev.cmdline else dev.name
+        head = head.rsplit("/", 1)[-1] or dev.name or "proc"
+        return f"(background: {head})"
     if by == "lang":
         return dev.lang
     if by == "launcher":
