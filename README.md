@@ -25,6 +25,20 @@ cool                              # interactive menu (Mole-style)
 cool status                       # one-shot health dashboard
 cool watch                        # full-screen live dashboard (Textual)
 
+# Dev-stack insight (who started my node/python? which project? which port?)
+cool dev                          # group dev procs by project (default)
+cool dev --by launcher            # group by who launched them (tmux/droid/vscode/...)
+cool dev --by lang                # node=N python=M ruby=K ...
+cool dev --stale                  # only orphans + stale-project processes
+cool dev --project macool         # filter to one project
+cool dev --kill                   # interactive kill picker
+cool ports                        # all listening ports (non-Apple) + pid/project
+cool ports 5432                   # who's on 5432?
+cool ports 4000:5000              # show port range
+cool ports --conflict             # same port held by multiple pids
+cool ports --free 4000:4100       # which ports are free in this range
+cool ports --kill                 # pick ports → kill their holders
+
 # AI CLI / process management
 cool procs                        # interactive multi-select kill
 cool reap                         # reap idle droid/codex/claude/tmux sessions
@@ -68,7 +82,10 @@ Destructive actions always ask for confirmation. Operations are logged to
 
 ## Roadmap
 
-- [x] `cool status` — one-shot dashboard
+- [x] `cool status` — one-shot dashboard (+ Top Projects by RSS)
+- [x] `cool watch` — full-screen Textual live dashboard
+- [x] `cool dev` — dev-stack (node/python/ruby/go/java/...) inventory with **project & launcher attribution**
+- [x] `cool ports` — listening port map with pid / process / project attribution
 - [x] `cool procs` — AI CLI inventory + interactive kill
 - [x] `cool reap` — idle session reaper
 - [x] `cool pressure` — memory-pressure guard (+ watch / auto-reap / auto-purge / notify)
@@ -77,7 +94,6 @@ Destructive actions always ask for confirmation. Operations are logged to
 - [x] `cool thermal` — thermal dashboard + sleep policy restore
 - [x] `cool launchd` — launchd audit & selective bootout
 - [x] `cool daemon` — launchd-managed rule engine
-- [x] `cool watch` — full-screen Textual live dashboard
 
 ## License
 

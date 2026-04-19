@@ -201,6 +201,7 @@ def render(console: Console | None = None) -> None:
         for panel in panels:
             console.print(panel)
     console.print(_cli_panel(procs))
+    console.print(_dev_panel())
 
     if mem.pressure_level == "critical" or (mem.swap_total and mem.swap_used / mem.swap_total > 0.7):
         console.print(
@@ -217,3 +218,52 @@ def render(console: Console | None = None) -> None:
 def render_group(mem: mem_mod.MemoryStats, sys_stats: sys_mod.SystemStats) -> Group:
     """Expose a Group for reuse (e.g., future `cool watch`)."""
     return Group(_cpu_panel(sys_stats), _mem_panel(mem))
+
+
+def _dev_panel(limit: int = 5) -> Panel:
+    """Top projects by RSS. Imported lazily so `cool status` still runs if
+    the dev collector is missing or fails."""
+    try:
+        from ..collectors import dev as dev_mod  # noqa: PLC0415
+        devs = dev_mod.collect(sample_interval=0.1)
+    except Exception:  # noqa: BLE001
+        return Panel(
+            Text("dev collector unavailable", style="dim"),
+            title="[bold]Top Projects by RSS[/]",
+            box=SIMPLE,
+            border_style="cyan",
+        )
+
+    groups = dev_mod.group_by(devs, "project")
+    if not groups:
+        return Panel(
+            Text("no dev processes detected", style="dim"),
+            title="[bold]Top Projects by RSS[/]",
+            box=SIMPLE,
+            border_style="cyan",
+        )
+
+    table = Table(box=None, expand=True, show_edge=False)
+    table.add_column("project", style="bold cyan")
+    table.add_column("count", justify="right")
+    table.add_column("total RSS", justify="right")
+    table.add_column("langs", style="dim")
+    table.add_column("launchers", style="dim")
+
+    ranked = sorted(
+        groups.items(),
+        key=lambda kv: -sum(d.rss for d in kv[1]),
+    )[:limit]
+    for name, items in ranked:
+        total_rss = sum(d.rss for d in items)
+        langs = ",".join(sorted({d.lang for d in items}))
+        launchers = ",".join(sorted({d.launcher.kind for d in items}))
+        style_name = "[red]" + name + "[/]" if any(d.is_orphan for d in items) else name
+        table.add_row(
+            style_name,
+            str(len(items)),
+            human_bytes(total_rss),
+            langs,
+            launchers,
+        )
+    return Panel(table, title="[bold]Top Projects by RSS[/]", box=SIMPLE, border_style="cyan")

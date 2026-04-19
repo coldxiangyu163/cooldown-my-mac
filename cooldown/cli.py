@@ -21,7 +21,13 @@ from .ui import (
     reap,
 )
 from .ui import (
+    dev as dev_ui,
+)
+from .ui import (
     launchd as launchd_ui,
+)
+from .ui import (
+    ports as ports_ui,
 )
 from .ui import (
     services as services_ui,
@@ -96,6 +102,14 @@ def _root(
         daemon_ui.run(console, action="status")
     elif choice == "watch":
         watch_ui.run(console)
+    elif choice == "dev":
+        dev_ui.run(console)
+    elif choice == "dev-stale":
+        dev_ui.run(console, stale_only=True)
+    elif choice == "ports":
+        ports_ui.run(console)
+    elif choice == "ports-conflict":
+        ports_ui.run(console, conflict=True)
 
 
 @app.command(help="One-shot system health dashboard.")
@@ -324,6 +338,87 @@ def _watch_cmd(
     interval: int = typer.Option(3, "--interval", "-n", help="Refresh interval seconds."),
 ) -> None:
     raise typer.Exit(watch_ui.run(console, interval=interval))
+
+
+@app.command(
+    name="dev",
+    help="Dev-stack (node/python/ruby/go/java/php/...) inventory with project & launcher attribution.",
+)
+def _dev_cmd(
+    by: str = typer.Option(
+        "project", "--by", "-b", help="Group dimension: project | lang | launcher | framework"
+    ),
+    stale: bool = typer.Option(False, "--stale", help="Only orphaned / stale dev processes."),
+    lang: list[str] = typer.Option(
+        None, "--lang", "-l", help="Filter language: node, python, ruby, go, java, php, deno, bun, rust, dotnet."
+    ),
+    project_filter: list[str] = typer.Option(
+        None, "--project", "-p", help="Filter by project name substring (can repeat)."
+    ),
+    launcher: list[str] = typer.Option(
+        None, "--launcher", help="Filter by launcher kind: tmux, droid, codex, vscode, launchd, ..."
+    ),
+    kill: bool = typer.Option(False, "--kill", help="Open interactive kill picker after listing."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview kills only."),
+    force: bool = typer.Option(False, "--force", "-9", help="SIGKILL instead of SIGTERM."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Assume yes to confirmations."),
+) -> None:
+    raise typer.Exit(
+        dev_ui.run(
+            console,
+            by=by,
+            stale_only=stale,
+            lang=lang or None,
+            project_filter=project_filter or None,
+            launcher=launcher or None,
+            kill=kill,
+            dry_run=dry_run,
+            force=force,
+            assume_yes=yes,
+        )
+    )
+
+
+@app.command(
+    name="ports",
+    help="Listening port map with pid/process/project attribution; kill port holders.",
+)
+def _ports_cmd(
+    query: str = typer.Argument(
+        None,
+        help="Port or comma list (e.g. 5432,6379) or range start:end (e.g. 4000:5000).",
+    ),
+    project_filter: str = typer.Option(None, "--project", "-p", help="Filter by project name substring."),
+    conflict: bool = typer.Option(False, "--conflict", help="Show only ports held by multiple distinct pids."),
+    free: str = typer.Option(None, "--free", help="Within range start:end, list ports NOT in use."),
+    show_all: bool = typer.Option(False, "--all", "-a", help="Include Apple/system services."),
+    kill: bool = typer.Option(False, "--kill", help="Interactive kill picker over shown rows."),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    force: bool = typer.Option(False, "--force", "-9"),
+    yes: bool = typer.Option(False, "--yes", "-y"),
+) -> None:
+    port = None
+    range_ = None
+    if query is not None:
+        if ":" in query:
+            range_ = query
+        else:
+            port = query
+    raise typer.Exit(
+        ports_ui.run(
+            console,
+            port=port,
+            range_=range_,
+            project_filter=project_filter,
+            conflict=conflict,
+            free=free,
+            show_all=show_all,
+            kill=kill,
+            dry_run=dry_run,
+            force=force,
+            assume_yes=yes,
+        )
+    )
 
 
 def main() -> None:

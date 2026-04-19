@@ -7,6 +7,10 @@ from rich.console import Console
 CHOICES: list[tuple[str, str]] = [
     ("status", "System health dashboard"),
     ("watch", "Full-screen live TUI (textual)"),
+    ("dev", "Dev-stack inventory (project/launcher attribution)"),
+    ("dev-stale", "Dev-stack — only stale / orphan"),
+    ("ports", "Listening port map"),
+    ("ports-conflict", "Listening ports — conflicts only"),
     ("procs", "AI CLI inventory + interactive kill"),
     ("reap", "Reap idle droid/codex/claude/tmux sessions"),
     ("reap-dry", "Reap — dry-run preview"),
