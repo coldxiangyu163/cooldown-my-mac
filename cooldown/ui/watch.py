@@ -456,7 +456,7 @@ def _build_app_class():
         # ---------------------------------------------------------- collectors
         def _gather_fast(self) -> None:
             try:
-                sys_stats = sys_mod.collect(cpu_sample=0.1)
+                sys_stats = sys_mod.collect(cpu_sample=0.2)
                 self.call_from_thread(self._apply_cpu, sys_stats)
             except Exception as exc:  # noqa: BLE001
                 self.call_from_thread(self._set_error, "cpu", exc)

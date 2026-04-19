@@ -74,6 +74,15 @@ def _cpu_content(sys_stats: sys_mod.SystemStats) -> Table:
                 f"max [{_pct_color(e_max)}]{e_max:4.1f}%[/]  "
                 f"(×{len(e)})",
             ))
+        # Top-3 hottest individual cores, Mole-style. Surfaces "Core 5 pinned
+        # at 100%" which otherwise disappears inside the P/E average.
+        ranked = sorted(enumerate(per), key=lambda iv: iv[1], reverse=True)
+        for idx, val in ranked[:3]:
+            label = f"P{idx + 1}" if idx < p_end else f"E{idx - p_end + 1}"
+            rows.append((
+                f"Core {label}",
+                f"[{_pct_color(val)}]{bar(val)} {val:5.1f}%[/]",
+            ))
     rows.append((
         "Load",
         f"{sys_stats.load_1:.2f} / {sys_stats.load_5:.2f} / {sys_stats.load_15:.2f}"
