@@ -91,7 +91,7 @@ def _build_table(devs: list[DevProc], by: str) -> Table:
     for header, items in groups.items():
         for d in items:
             idle_txt = human_duration(d.idle_seconds) if d.idle_seconds is not None else "-"
-            proj_name = d.project.name if d.project else "(cwd unknown)"
+            proj_name = d.project.name if d.project else dev_mod._group_key(d, "project")
             cmd = _truncate(d.cmdline, 80)
             if by == "project":
                 table.add_row(
@@ -139,7 +139,7 @@ def _build_table(devs: list[DevProc], by: str) -> Table:
 
 def _label(dev: DevProc) -> str:
     idle_txt = human_duration(dev.idle_seconds) if dev.idle_seconds is not None else "?"
-    proj_name = dev.project.name if dev.project else "(cwd unknown)"
+    proj_name = dev.project.name if dev.project else dev_mod._group_key(dev, "project")
     cmd = dev.cmdline if len(dev.cmdline) <= 60 else dev.cmdline[:57] + "..."
     orphan = " [ORPHAN]" if dev.is_orphan else ""
     return (
