@@ -36,10 +36,11 @@ def _kv(rows: list[tuple[str, str]]) -> Table:
     return t
 
 
-def _cpu_panel(sys_stats: sys_mod.SystemStats) -> Panel:
+def _cpu_content(sys_stats: sys_mod.SystemStats) -> Table:
+    """Inner CPU content (no outer Panel). Shared with `cool watch`."""
     pct = sys_stats.cpu_percent
     color = _pct_color(pct)
-    content = _kv(
+    return _kv(
         [
             ("Total", f"[{color}]{bar(pct)} {pct:5.1f}%[/]"),
             (
@@ -51,15 +52,18 @@ def _cpu_panel(sys_stats: sys_mod.SystemStats) -> Panel:
             ("Processes", str(sys_stats.total_processes)),
         ]
     )
-    return Panel(content, title="[bold]CPU[/]", box=SIMPLE, border_style="blue")
 
 
-def _mem_panel(mem: mem_mod.MemoryStats) -> Panel:
+def _cpu_panel(sys_stats: sys_mod.SystemStats) -> Panel:
+    return Panel(_cpu_content(sys_stats), title="[bold]CPU[/]", box=SIMPLE, border_style="blue")
+
+
+def _mem_content(mem: mem_mod.MemoryStats) -> Table:
     used_pct = mem.used_percent
     color = _pct_color(used_pct)
     swap_pct = (mem.swap_used / mem.swap_total * 100.0) if mem.swap_total else 0.0
     swap_color = _pct_color(swap_pct)
-    content = _kv(
+    return _kv(
         [
             (
                 "Used",
@@ -79,7 +83,12 @@ def _mem_panel(mem: mem_mod.MemoryStats) -> Panel:
             ("Pressure", _pressure_badge(mem.pressure_level)),
         ]
     )
-    return Panel(content, title="[bold]Memory[/]", box=SIMPLE, border_style="magenta")
+
+
+def _mem_panel(mem: mem_mod.MemoryStats) -> Panel:
+    return Panel(
+        _mem_content(mem), title="[bold]Memory[/]", box=SIMPLE, border_style="magenta"
+    )
 
 
 def _pressure_badge(level: str) -> str:
@@ -91,7 +100,7 @@ def _pressure_badge(level: str) -> str:
     return mapping.get(level, "[dim]unknown[/]")
 
 
-def _thermal_panel(t: therm_mod.ThermalStats) -> Panel:
+def _thermal_content(t: therm_mod.ThermalStats) -> Table:
     rows = [
         ("Warning", "[green]none[/]" if t.thermal_warning == "none" else f"[red]{t.thermal_warning}[/]"),
         ("CPU power", t.cpu_power_status),
@@ -113,7 +122,13 @@ def _thermal_panel(t: therm_mod.ThermalStats) -> Panel:
             "[red]prevented[/]" if t.sleep_prevented else "[green]allowed[/]",
         ),
     ]
-    return Panel(_kv(rows), title="[bold]Thermal / Power[/]", box=SIMPLE, border_style="red")
+    return _kv(rows)
+
+
+def _thermal_panel(t: therm_mod.ThermalStats) -> Panel:
+    return Panel(
+        _thermal_content(t), title="[bold]Thermal / Power[/]", box=SIMPLE, border_style="red"
+    )
 
 
 def _cli_panel(procs: list[procs_mod.ProcInfo]) -> Panel:

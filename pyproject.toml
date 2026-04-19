@@ -39,6 +39,7 @@ watch = [
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.23",
     "pytest-mock>=3.12",
     "ruff>=0.6",
     "textual>=0.70",

@@ -44,23 +44,30 @@ def test_watch_module_does_not_import_textual_eagerly():
 def test_watch_app_has_required_bindings():
     app_cls = watch._build_app_class()
     keys = _binding_keys(app_cls.BINDINGS)
+    # Quit / pause / refresh are the non-negotiable UX minimum.
     for expected in ("q", "r", "p"):
+        assert expected in keys, f"missing binding: {expected!r} (have {keys})"
+    # New dashboard adds slow refresh, dry-run, kill, focus shortcuts.
+    for expected in ("R", "d", "k", "K", "1", "2", "3"):
         assert expected in keys, f"missing binding: {expected!r} (have {keys})"
 
 
-def test_watch_app_compose_yields_at_least_four_widgets():
+def test_watch_app_compose_contains_header_healthbar_body_footer():
     app_cls = watch._build_app_class()
-    app = app_cls(interval=3)
+    app = app_cls(fast_interval=3, slow_interval=15)
     widgets = list(app.compose())
-    assert len(widgets) >= 4, f"expected >= 4 top-level widgets, got {len(widgets)}"
+    # Header + healthbar Static + Grid(body) + Footer
+    assert len(widgets) == 4, f"expected 4 top-level widgets, got {len(widgets)}"
 
 
-def test_watch_app_title_and_default_interval():
+def test_watch_app_title_and_default_intervals():
     app_cls = watch._build_app_class()
     app = app_cls()
-    assert app.interval == 3
+    assert app.fast_interval == 3
+    assert app.slow_interval == 15
     assert app.TITLE == "cooldown · watch"
     assert app.paused is False
+    assert app.dry_run is False
 
 
 def test_run_without_textual_prints_hint(monkeypatch):
@@ -74,8 +81,205 @@ def test_run_without_textual_prints_hint(monkeypatch):
     monkeypatch.setattr(watch, "_build_app_class", _raise)
 
     buf_console = Console(record=True, width=100)
-    rc = watch.run(buf_console, interval=3)
+    rc = watch.run(buf_console, interval=3, slow_interval=15)
     assert rc != 0
     output = buf_console.export_text()
     assert "textual is not installed" in output
     assert "pip install textual" in output or "pipx inject" in output
+
+
+# ---------------------------------------------------------------------------
+# Pure row-builder tests (no textual required)
+# ---------------------------------------------------------------------------
+
+def test_build_ai_rows_groups_and_sums():
+    from cooldown.collectors.procs import ProcInfo
+
+    def _p(pid, kind, rss, cpu=0.0, idle=0.0):
+        return ProcInfo(
+            pid=pid, ppid=1, kind=kind, name=kind, cmdline=kind,
+            rss=rss, cpu_percent=cpu, create_time=0.0, age=0.0,
+            tty=None, user="me", idle_seconds=idle,
+        )
+
+    procs = [_p(1, "droid", 100), _p(2, "droid", 50), _p(3, "codex", 300)]
+    rows = watch.build_ai_rows(procs)
+    by_kind = {r.kind: r for r in rows}
+    assert by_kind["droid"].count == 2
+    assert by_kind["droid"].rss == 150
+    assert set(by_kind["droid"].pids) == {1, 2}
+    assert by_kind["codex"].count == 1
+
+
+def test_build_project_rows_ranks_by_rss():
+    from cooldown.collectors.ancestry import Launcher
+    from cooldown.collectors.dev import DevProc
+
+    def _d(pid, project, lang, rss, orphan=False):
+        return DevProc(
+            pid=pid, ppid=1, lang=lang, framework=None, name=lang,
+            cmdline=lang, rss=rss, cpu_percent=0.0, age=0.0,
+            cwd=None,
+            project=None if project is None else type(
+                "P", (), {"name": project, "path": project}
+            )(),
+            launcher=Launcher(kind="launchd", label="launchd", pid=1),
+            is_orphan=orphan, user="me",
+        )
+
+    devs = [
+        _d(1, "alpha", "node", 500),
+        _d(2, "alpha", "python", 700),
+        _d(3, "beta", "node", 200, orphan=True),
+    ]
+    rows = watch.build_project_rows(devs)
+    # alpha (1.2GB) comes first.
+    assert rows[0].name == "alpha"
+    assert rows[0].rss == 1200
+    assert rows[0].count == 2
+    assert rows[0].orphan is False
+    # beta's one orphan flags the whole row.
+    beta = next(r for r in rows if r.name == "beta")
+    assert beta.orphan is True
+
+
+def test_build_port_rows_dedup_ipv4_ipv6_twins():
+    from cooldown.collectors.ports import PortEntry
+
+    e4 = PortEntry(port=5432, proto="tcp4", bind="127.0.0.1", pid=1000,
+                   process="postgres", user="me")
+    e6 = PortEntry(port=5432, proto="tcp6", bind="::1", pid=1000,
+                   process="postgres", user="me")
+    e_other = PortEntry(port=3306, proto="tcp4", bind="*", pid=2000,
+                        process="mysqld", user="me")
+    rows = watch.build_port_rows([e4, e6, e_other], {}, {})
+    # Same (port, pid) collapsed to one row.
+    assert len(rows) == 2
+    ports_ = sorted(r.port for r in rows)
+    assert ports_ == [3306, 5432]
+
+
+def test_render_subtitle_includes_all_bits():
+    from cooldown.collectors.memory import MemoryStats
+
+    mem = MemoryStats(
+        total=64 * 1024**3, used=40 * 1024**3, available=20 * 1024**3,
+        used_percent=62.5, wired=10 * 1024**3, compressed=5 * 1024**3,
+        swap_total=10 * 1024**3, swap_used=1 * 1024**3,
+        page_size=16384, pressure_level="warn",
+    )
+    sub = watch.render_subtitle(
+        mem=mem, sys_stats=None, therm=None, procs=[],
+        last_op=None, fast_interval=3, slow_interval=15,
+        paused=False, dry_run=True,
+    )
+    assert "pressure" in sub
+    assert "warn" in sub
+    assert "every 3s / 15s" in sub
+    assert "dry-run" in sub
+
+
+# ---------------------------------------------------------------------------
+# Oplog tail (pure IO test)
+# ---------------------------------------------------------------------------
+
+def test_last_oplog_entry_reads_trailing_line(tmp_path, monkeypatch):
+    log = tmp_path / "operations.log"
+    log.write_text(
+        '{"ts": "2026-04-19T10:00:00", "action": "reap.dry-run", "pid": 1}\n'
+        '{"ts": "2026-04-19T10:05:00", "action": "reap.kill", "pid": 2}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(watch, "LOG_PATH", log)
+    result = watch._last_oplog_entry()
+    assert result is not None
+    action, ts = result
+    assert action == "reap.kill"
+    assert ts > 0
+
+
+def test_last_oplog_entry_returns_none_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(watch, "LOG_PATH", tmp_path / "nonexistent.log")
+    assert watch._last_oplog_entry() is None
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: mount the app headlessly and push one fake tick through each
+# apply handler. This catches layout / CSS / widget-id regressions that the
+# pure-logic tests above miss.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_watch_app_end_to_end_mount_and_apply(monkeypatch):
+    from cooldown.collectors.memory import MemoryStats
+    from cooldown.collectors.procs import ProcInfo
+    from cooldown.collectors.system import SystemStats
+    from cooldown.collectors.thermal import ThermalStats
+
+    app_cls = watch._build_app_class()
+    app = app_cls(fast_interval=999, slow_interval=999)
+
+    # No oplog -> subtitle still renders cleanly.
+    monkeypatch.setattr(watch, "_last_oplog_entry", lambda: None)
+
+    async with app.run_test() as pilot:
+        # Feed synthetic data via the public apply path.
+        mem = MemoryStats(
+            total=64 * 1024**3, used=40 * 1024**3, available=20 * 1024**3,
+            used_percent=62.5, wired=10 * 1024**3, compressed=5 * 1024**3,
+            swap_total=10 * 1024**3, swap_used=1 * 1024**3,
+            page_size=16384, pressure_level="warn",
+        )
+        sys_stats = SystemStats(
+            cpu_percent=42.0, load_1=1.0, load_5=1.0, load_15=1.0,
+            cpu_count_logical=10, cpu_count_physical=10,
+            uptime=3600.0, total_processes=500,
+        )
+        therm = ThermalStats(
+            thermal_warning="none", cpu_power_status="ok",
+            low_power_mode=False, ac_power=True, battery_percent=100,
+            display_sleep=10, disk_sleep=10, sleep_prevented=False,
+        )
+        proc = ProcInfo(
+            pid=1234, ppid=1, kind="droid", name="droid", cmdline="droid run",
+            rss=500 * 1024**2, cpu_percent=5.0, create_time=0.0, age=0.0,
+            tty=None, user="me", idle_seconds=60.0,
+        )
+        await pilot.pause()
+        app._apply_cpu(sys_stats)
+        app._apply_mem(mem)
+        app._apply_thermal(therm)
+        ai_rows = watch.build_ai_rows([proc])
+        app._apply_ai([proc], ai_rows)
+        app._apply_projects([
+            watch.ProjectRow(
+                name="alpha", count=2, rss=1024**3,
+                langs="node", launchers="tmux", orphan=False, pids=[10, 11],
+            )
+        ])
+        app._apply_ports([
+            watch.PortRow(
+                port=4000, proto="tcp4", pid=9999,
+                process="node", project="web", launcher="droid",
+            )
+        ])
+        await pilot.pause()
+
+        # All six panels are mounted with the expected ids.
+        for panel_id in ("cpu", "mem", "thermal", "ai", "projects", "ports"):
+            assert app.query_one(f"#{panel_id}") is not None
+
+        # Healthbar Static (which replaces the header subtitle) is populated
+        # with markup-formatted status. Static.render() returns a Content
+        # object whose __str__ gives us the rendered plain text.
+        from textual.widgets import Static
+        hb = app.query_one("#healthbar", Static)
+        health_text = str(hb.render())
+        assert "Health" in health_text
+        assert "pressure" in health_text
+
+        # DataTable rows landed.
+        from textual.widgets import DataTable
+        assert app.query_one("#ai", DataTable).row_count == 1
+        assert app.query_one("#projects", DataTable).row_count == 1
+        assert app.query_one("#ports", DataTable).row_count == 1

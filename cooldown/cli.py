@@ -335,9 +335,17 @@ def _daemon_run(
 
 @app.command(name="watch", help="Full-screen Textual live dashboard (requires `textual`).")
 def _watch_cmd(
-    interval: int = typer.Option(3, "--interval", "-n", help="Refresh interval seconds."),
+    interval: int = typer.Option(
+        3, "--interval", "-n", help="Fast-tick interval (CPU/Mem/Thermal/AI CLI) in seconds."
+    ),
+    slow_interval: int = typer.Option(
+        15,
+        "--slow-interval",
+        "-N",
+        help="Slow-tick interval (Top Projects/Top Ports) in seconds.",
+    ),
 ) -> None:
-    raise typer.Exit(watch_ui.run(console, interval=interval))
+    raise typer.Exit(watch_ui.run(console, interval=interval, slow_interval=slow_interval))
 
 
 @app.command(
