@@ -7,7 +7,31 @@ import typer
 from rich.console import Console
 
 from . import __version__
-from .ui import dashboard, menu, pressure, procs, reap
+from .ui import (
+    apps as apps_ui,
+)
+from .ui import (
+    daemon as daemon_ui,
+)
+from .ui import (
+    dashboard,
+    menu,
+    pressure,
+    procs,
+    reap,
+)
+from .ui import (
+    launchd as launchd_ui,
+)
+from .ui import (
+    services as services_ui,
+)
+from .ui import (
+    thermal as thermal_ui,
+)
+from .ui import (
+    watch as watch_ui,
+)
 
 app = typer.Typer(
     help="cooldown-my-mac · runtime thermal & workload manager",
@@ -54,6 +78,24 @@ def _root(
         pressure.run(console)
     elif choice == "pressure-watch":
         pressure.run(console, mode="watch", notify=True)
+    elif choice == "services":
+        services_ui.run(console)
+    elif choice == "apps-list":
+        apps_ui.run(console, action="list")
+    elif choice == "apps-suspend":
+        apps_ui.run(console, action="suspend")
+    elif choice == "apps-resume":
+        apps_ui.run(console, action="resume")
+    elif choice == "thermal":
+        thermal_ui.run(console)
+    elif choice == "launchd":
+        launchd_ui.run(console)
+    elif choice == "launchd-audit":
+        launchd_ui.run(console, audit=True, disable=True)
+    elif choice == "daemon-status":
+        daemon_ui.run(console, action="status")
+    elif choice == "watch":
+        watch_ui.run(console)
 
 
 @app.command(help="One-shot system health dashboard.")
@@ -148,6 +190,140 @@ def _pressure_cmd(
         assume_yes=yes,
     )
     raise typer.Exit(code)
+
+
+@app.command(name="services", help="Start / stop local dev services (mysql/postgres/redis/...).")
+def _services_cmd(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Assume yes to confirmations."),
+    only: list[str] = typer.Option(None, "--only", "-o", help="Filter by kind (mysql, postgres, redis, ...)."),
+) -> None:
+    code = services_ui.run(console, dry_run=dry_run, assume_yes=yes, only=only or None)
+    raise typer.Exit(code)
+
+
+apps_app = typer.Typer(help="List / suspend / resume / quit heavy background apps.")
+app.add_typer(apps_app, name="apps")
+
+
+@apps_app.command("list", help="List heavy background apps.")
+def _apps_list() -> None:
+    raise typer.Exit(apps_ui.run(console, action="list"))
+
+
+@apps_app.command("suspend", help="SIGSTOP a process tree (freezes CPU until resumed).")
+def _apps_suspend(
+    yes: bool = typer.Option(False, "--yes", "-y"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    kinds: list[str] = typer.Option(None, "--kind", "-k"),
+) -> None:
+    raise typer.Exit(
+        apps_ui.run(console, action="suspend", dry_run=dry_run, assume_yes=yes, kinds=kinds or None)
+    )
+
+
+@apps_app.command("resume", help="SIGCONT a previously suspended app.")
+def _apps_resume(
+    yes: bool = typer.Option(False, "--yes", "-y"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    kinds: list[str] = typer.Option(None, "--kind", "-k"),
+) -> None:
+    raise typer.Exit(
+        apps_ui.run(console, action="resume", dry_run=dry_run, assume_yes=yes, kinds=kinds or None)
+    )
+
+
+@apps_app.command("quit", help="Gracefully quit (osascript) then SIGTERM.")
+def _apps_quit(
+    yes: bool = typer.Option(False, "--yes", "-y"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    kinds: list[str] = typer.Option(None, "--kind", "-k"),
+) -> None:
+    raise typer.Exit(
+        apps_ui.run(console, action="quit", dry_run=dry_run, assume_yes=yes, kinds=kinds or None)
+    )
+
+
+@app.command(name="thermal", help="Thermal dashboard (pmset + SMC) + optional sleep-policy restore.")
+def _thermal_cmd(
+    restore: bool = typer.Option(False, "--restore", help="Restore safe sleep defaults (displaysleep/disksleep=10)."),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    yes: bool = typer.Option(False, "--yes", "-y"),
+) -> None:
+    raise typer.Exit(
+        thermal_ui.run(console, restore=restore, dry_run=dry_run, assume_yes=yes)
+    )
+
+
+@app.command(name="launchd", help="Audit launchd agents/daemons; optionally disable noisy ones.")
+def _launchd_cmd(
+    audit: bool = typer.Option(False, "--audit", help="Show full non-Apple table."),
+    disable_: bool = typer.Option(False, "--disable", help="Enable interactive disable picker."),
+    category: str = typer.Option(None, "--category", "-c", help="Filter: apple|homebrew|third-party|user|unknown"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    yes: bool = typer.Option(False, "--yes", "-y"),
+) -> None:
+    raise typer.Exit(
+        launchd_ui.run(
+            console,
+            audit=audit,
+            disable=disable_,
+            category=category,
+            dry_run=dry_run,
+            assume_yes=yes,
+        )
+    )
+
+
+daemon_app = typer.Typer(help="Background launchd agent (rule engine).")
+app.add_typer(daemon_app, name="daemon")
+
+
+@daemon_app.command("install", help="Install launchd plist and start the agent.")
+def _daemon_install(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    yes: bool = typer.Option(False, "--yes", "-y"),
+) -> None:
+    raise typer.Exit(daemon_ui.run(console, action="install", dry_run=dry_run, assume_yes=yes))
+
+
+@daemon_app.command("uninstall", help="Stop and remove the launchd agent.")
+def _daemon_uninstall(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    yes: bool = typer.Option(False, "--yes", "-y"),
+) -> None:
+    raise typer.Exit(daemon_ui.run(console, action="uninstall", dry_run=dry_run, assume_yes=yes))
+
+
+@daemon_app.command("status", help="Show daemon PID + recent log tail.")
+def _daemon_status() -> None:
+    raise typer.Exit(daemon_ui.run(console, action="status"))
+
+
+@daemon_app.command("logs", help="Tail the daemon log.")
+def _daemon_logs() -> None:
+    raise typer.Exit(daemon_ui.run(console, action="logs"))
+
+
+@daemon_app.command("config-init", help="Write ~/.config/cooldown/daemon.yaml with commented defaults.")
+def _daemon_config_init(
+    force: bool = typer.Option(False, "--force", help="Overwrite existing config."),
+) -> None:
+    raise typer.Exit(daemon_ui.run(console, action="config-init", force=force))
+
+
+@daemon_app.command("run", help="Run the rule engine in the foreground (used by launchd).")
+def _daemon_run(
+    config: str = typer.Option(None, "--config", "-c", help="Alternate YAML path."),
+) -> None:
+    raise typer.Exit(daemon_ui.run(console, action="run", config_path=config))
+
+
+@app.command(name="watch", help="Full-screen Textual live dashboard (requires `textual`).")
+def _watch_cmd(
+    interval: int = typer.Option(3, "--interval", "-n", help="Refresh interval seconds."),
+) -> None:
+    raise typer.Exit(watch_ui.run(console, interval=interval))
 
 
 def main() -> None:

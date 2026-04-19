@@ -1,0 +1,48 @@
+# cooldown daemon configuration
+# ~/.config/cooldown/daemon.yaml
+#
+# The daemon polls memory pressure every `interval_seconds` and applies
+# automatic remediations based on the rules below. Any rule can be disabled
+# by setting `enabled: false`.
+
+# Seconds between ticks. The daemon sleeps this long between each evaluation.
+interval_seconds: 60
+
+# If true, all actions are simulated (oplog entries recorded, no kills / purge).
+dry_run: false
+
+# Where to write the single-line daemon.log.
+log_dir: ~/Library/Logs/cooldown
+
+# Pressure thresholds (ratios 0..1). Mirror `cool pressure`'s defaults.
+thresholds:
+  ram_warn: 0.80
+  ram_crit: 0.92
+  swap_warn: 0.40
+  swap_crit: 0.80
+  compressor_warn: 0.15
+  compressor_crit: 0.25
+
+# Auto-reap idle AI CLI / multiplexer sessions.
+reap:
+  enabled: true
+  # Reap AI CLIs (droid, codex, claude, ...) idle for at least this long.
+  ai_idle_seconds: 1800
+  # Reap tmux/cmux/zellij panes idle for at least this long.
+  mux_idle_seconds: 14400
+  # Only fire when the overall severity reaches this level ("warn" or "critical").
+  trigger_severity: critical
+
+# Auto-run `sudo -n purge` to drop disk cache. Disabled by default because
+# it requires cached sudo credentials.
+purge:
+  enabled: false
+  trigger_severity: critical
+  # Never purge more often than this many seconds.
+  min_interval_seconds: 1800
+
+# Notification Center toast when severity crosses warn/critical.
+notify:
+  enabled: true
+  # Throttle: don't re-notify within this many seconds of the last notification.
+  cooldown_seconds: 300
