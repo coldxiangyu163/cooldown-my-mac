@@ -128,7 +128,9 @@ def _procs_cmd(
         "-k",
         help=(
             "Filter by kind (can repeat): droid, codex, claude, opencode, "
-            "nanobot, hermes, tmux, cmux, zellij."
+            "nanobot, hermes, gemini, aider, cursor-agent, copilot, "
+            "windsurf, qwen, kimi, goose, aichat, continue, amp, crush, "
+            "tmux, cmux, zellij."
         ),
     ),
 ) -> None:

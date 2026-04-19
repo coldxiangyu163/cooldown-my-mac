@@ -11,19 +11,77 @@ from ..util import PROC_ERRORS
 
 # Patterns that identify AI CLIs / terminal multiplexers / bot gateways we
 # care about. Order matters: the first match wins.
+#
+# Each entry is ``(kind, needles)`` and a process is classified under
+# ``kind`` when ANY needle is a substring of the padded haystack
+# ``f" {name} {cmdline} "`` (lowercased). Padding with spaces on both
+# sides lets us use `" gemini "` style needles that behave like
+# whitespace-delimited word boundaries and still match bare invocations
+# such as ``gemini --help`` whose cmdline has no trailing space.
+#
+# Keep more specific kinds (e.g. ``cursor-agent``) listed BEFORE more
+# generic ones so they win the first-match race.
 KIND_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
+    # --- Factory-first AI CLIs ---------------------------------------
     ("droid", ("droid",)),
     ("codex", ("codex",)),
     ("claude", ("claude",)),
     ("opencode", ("opencode",)),
     ("nanobot", ("nanobot",)),
     ("hermes", ("hermes",)),
+    # --- Other popular AI CLIs / coding agents -----------------------
+    # Prefer distinctive package paths (``@org/pkg``) and path-anchored
+    # needles (``/bin``, ``/gemini``) over bare words, because the bare
+    # word variants are already covered via word-boundary ("` gemini `")
+    # matching on the padded haystack.
+    ("gemini", ("@google/gemini", "gemini-cli", "/gemini", " gemini ")),
+    ("aider", ("aider-chat", "/aider", " aider ")),
+    ("cursor-agent", ("cursor-agent",)),
+    ("copilot", (
+        "github-copilot",
+        "github.copilot",  # VS Code / Cursor extension id (e.g. github.copilot-1.0.0)
+        "@github/copilot",
+        "gh-copilot",
+        "copilot-cli",
+        "copilot-language-server",
+        ".copilot/",
+        "/copilot",
+        " copilot ",
+    )),
+    ("windsurf", ("windsurf",)),
+    ("qwen", ("@qwen-code/", "qwen-code", "qwen-coder", " qwen ")),
+    ("kimi", ("@moonshot/", "kimi-cli", "kimi-code", "kimi-coder")),
+    ("goose", ("block-goose", "goose-cli", "/goose", " goose ")),
+    ("aichat", ("aichat",)),
+    ("continue", ("@continuedev/", "continuedev", ".continue/")),
+    ("amp", ("@sourcegraph/amp", "sourcegraph-amp")),
+    ("crush", ("@charm/crush", "charmbracelet/crush")),
+    # --- Multiplexers ------------------------------------------------
     ("cmux", ("cmux",)),
     ("tmux", ("tmux",)),
     ("zellij", ("zellij",)),
 ]
 
-AI_KINDS = {"droid", "codex", "claude", "opencode", "nanobot", "hermes"}
+AI_KINDS = {
+    "droid",
+    "codex",
+    "claude",
+    "opencode",
+    "nanobot",
+    "hermes",
+    "gemini",
+    "aider",
+    "cursor-agent",
+    "copilot",
+    "windsurf",
+    "qwen",
+    "kimi",
+    "goose",
+    "aichat",
+    "continue",
+    "amp",
+    "crush",
+}
 MUX_KINDS = {"tmux", "cmux", "zellij"}
 
 
@@ -46,7 +104,10 @@ class ProcInfo:
 
 
 def _classify(name: str, cmdline: str) -> str | None:
-    hay = f"{name} {cmdline}".lower()
+    # Pad with spaces so word-boundary style needles like `" gemini "`
+    # also match `name`-only cases where `cmdline` is empty or the binary
+    # appears at the edge of the haystack.
+    hay = f" {name} {cmdline} ".lower()
     for kind, needles in KIND_PATTERNS:
         for needle in needles:
             if needle in hay:

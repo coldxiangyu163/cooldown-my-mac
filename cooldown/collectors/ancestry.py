@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import psutil
 
 from ..util import PROC_ERRORS
+from .procs import _classify as _procs_classify
 
 # Ordered list: first match wins. Each entry is
 # (kind, predicate) where predicate returns True if the ancestor matches.
@@ -122,21 +123,18 @@ def classify_ancestor(proc: psutil.Process) -> Launcher | None:
     if not name and not exe and not cmdline:
         return None
 
-    hay = f"{name} {cmdline}".lower()
-    exe_lower = exe.lower()
-
-    # --- Multiplexers -------------------------------------------------
-    if "tmux" in hay or "/tmux" in exe_lower:
-        return Launcher(kind="tmux", label="tmux", pid=proc.pid)
-    if "cmux" in hay or "/cmux" in exe_lower:
-        return Launcher(kind="cmux", label="cmux", pid=proc.pid)
-    if "zellij" in hay or "/zellij" in exe_lower:
-        return Launcher(kind="zellij", label="zellij", pid=proc.pid)
-
-    # --- AI CLIs ------------------------------------------------------
-    for kind in ("droid", "codex", "claude", "opencode", "nanobot", "hermes"):
-        if kind in hay:
-            return Launcher(kind=kind, label=kind, pid=proc.pid)
+    # --- Multiplexers & AI CLIs --------------------------------------
+    # Delegate to the shared classifier in ``procs._classify`` so the
+    # two collectors stay in lock-step. It covers tmux/cmux/zellij as
+    # well as every AI CLI we know about (droid / codex / claude /
+    # gemini / aider / cursor-agent / copilot / windsurf / qwen /
+    # kimi / goose / aichat / continue / amp / crush / ...).
+    # We include ``exe`` in the cmdline-side of the haystack so
+    # path-only matches (e.g. /opt/homebrew/bin/gemini with an empty
+    # argv beyond argv[0]) still classify correctly.
+    kind = _procs_classify(name, f"{cmdline} {exe}")
+    if kind is not None:
+        return Launcher(kind=kind, label=kind, pid=proc.pid)
 
     # --- IDEs (path-based) -------------------------------------------
     if "Visual Studio Code" in exe or "Code Helper" in exe or "Visual Studio Code" in cmdline:
