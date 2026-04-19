@@ -3,6 +3,28 @@ from __future__ import annotations
 
 import time
 
+import psutil
+
+# Unified exception tuple for *per-process* psutil probes.
+#
+# On macOS, reading certain protected processes (Apple-signed system
+# services, other users' procs under SIP, etc.) via sysctl KERN_PROCARGS2
+# can return EPERM. psutil's C extension wraps this as:
+#   - PermissionError / OSError (EPERM/EACCES from the syscall)
+#   - SystemError (when the C call "returned a result with an exception set")
+# rather than the usual psutil.AccessDenied. Over a long-running loop
+# (e.g. `cool watch`) this is guaranteed to hit sooner or later, so every
+# call site that touches proc.cmdline() / cwd() / exe() / environ() /
+# username() / etc. must catch this unified tuple.
+PROC_ERRORS: tuple[type[BaseException], ...] = (
+    psutil.NoSuchProcess,
+    psutil.AccessDenied,
+    psutil.ZombieProcess,
+    PermissionError,
+    OSError,
+    SystemError,
+)
+
 
 def human_bytes(num: float | int) -> str:
     n = float(num)

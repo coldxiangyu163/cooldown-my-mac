@@ -18,6 +18,8 @@ from dataclasses import dataclass
 
 import psutil
 
+from ..util import PROC_ERRORS
+
 _WELL_KNOWN: dict[int, str] = {
     22: "ssh",
     80: "http",
@@ -214,9 +216,9 @@ def enrich_command(entries: list[PortEntry]) -> None:
             p = psutil.Process(e.pid)
             try:
                 cmd = " ".join(p.cmdline())
-            except (psutil.AccessDenied, psutil.ZombieProcess):
+            except PROC_ERRORS:
                 cmd = ""
-        except (psutil.NoSuchProcess, psutil.Error):
+        except PROC_ERRORS:
             cmd = ""
         seen[e.pid] = cmd
         e.command = cmd

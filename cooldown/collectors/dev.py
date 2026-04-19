@@ -14,6 +14,7 @@ from pathlib import Path
 
 import psutil
 
+from ..util import PROC_ERRORS
 from . import ancestry as ancestry_mod
 from . import project as project_mod
 from .ancestry import Launcher
@@ -150,11 +151,16 @@ def collect(sample_interval: float = 0.2) -> list[DevProc]:
     real CPU percentage (first call primes, second call measures).
     """
     # --- Pass 1: match candidates & prime CPU accounting ----------------
+    # NB: do not pre-fetch cmdline via process_iter attrs — see comment
+    # in cooldown/util.py::PROC_ERRORS for why (macOS EPERM/SystemError).
     candidates: list[tuple[psutil.Process, str]] = []
-    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+    for p in psutil.process_iter(["pid", "name"]):
         try:
             name = p.info["name"] or ""
-            cmd = " ".join(p.info["cmdline"] or [])
+            try:
+                cmd = " ".join(p.cmdline() or [])
+            except PROC_ERRORS:
+                cmd = ""
             if _is_self(name, cmd):
                 continue
             lang = _classify_lang(name, cmd)
@@ -162,7 +168,7 @@ def collect(sample_interval: float = 0.2) -> list[DevProc]:
                 continue
             candidates.append((p, lang))
             p.cpu_percent(None)  # prime
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except PROC_ERRORS:
             continue
 
     time.sleep(sample_interval)
@@ -176,33 +182,33 @@ def collect(sample_interval: float = 0.2) -> list[DevProc]:
             with p.oneshot():
                 try:
                     cpu = p.cpu_percent(None) / ncpu
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                except PROC_ERRORS:
                     cpu = 0.0
                 try:
                     rss = p.memory_info().rss
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                except PROC_ERRORS:
                     rss = 0
                 try:
                     ppid = p.ppid()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                except PROC_ERRORS:
                     ppid = 0
                 try:
                     username = p.username()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                except PROC_ERRORS:
                     username = ""
                 try:
                     name = p.name()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                except PROC_ERRORS:
                     name = ""
                 try:
                     cmd = " ".join(p.cmdline())
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                except PROC_ERRORS:
                     cmd = name
                 try:
                     ct = p.create_time()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                except PROC_ERRORS:
                     ct = now
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except PROC_ERRORS:
             continue
 
         if _is_self(name, cmd):

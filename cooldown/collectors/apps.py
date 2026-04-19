@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 
 import psutil
 
+from ..util import PROC_ERRORS
+
 # Classification table: kind -> list of .app bundle folder names or main
 # executable names we expect to see. The first entry in each tuple is the
 # canonical display name for the app. The second `needles` tuple matches
@@ -75,7 +77,7 @@ def _sample(procs: list[psutil.Process], interval: float = 0.2) -> dict[int, flo
     for p in procs:
         try:
             p.cpu_percent(None)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except PROC_ERRORS:
             continue
     time.sleep(interval)
     out: dict[int, float] = {}
@@ -83,7 +85,7 @@ def _sample(procs: list[psutil.Process], interval: float = 0.2) -> dict[int, flo
     for p in procs:
         try:
             out[p.pid] = p.cpu_percent(None) / ncpu
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except PROC_ERRORS:
             continue
     return out
 
@@ -92,16 +94,19 @@ def collect(*, freeze_sample_interval: float = 0.4) -> list[AppInfo]:
     """Return one AppInfo per detected heavy app (main process only)."""
     groups: dict[str, list[tuple[psutil.Process, str]]] = {}
 
-    for p in psutil.process_iter(["pid", "name", "cmdline", "ppid"]):
+    for p in psutil.process_iter(["pid", "name", "ppid"]):
         try:
             name = p.info["name"] or ""
-            cmd = " ".join(p.info["cmdline"] or [])
+            try:
+                cmd = " ".join(p.cmdline() or [])
+            except PROC_ERRORS:
+                cmd = ""
             classified = _classify(name, cmd)
             if classified is None:
                 continue
             kind, display = classified
             groups.setdefault(kind, []).append((p, display))
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except PROC_ERRORS:
             continue
 
     # First CPU sample.
@@ -121,7 +126,7 @@ def collect(*, freeze_sample_interval: float = 0.4) -> list[AppInfo]:
                 ppid = rep_proc.ppid()
                 rss = rep_proc.memory_info().rss
                 name = rep_proc.name()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except PROC_ERRORS:
             continue
         cpu = cpu_b.get(rep_proc.pid, cpu_a.get(rep_proc.pid, 0.0))
         # Frozen heuristic: both samples were ~0% AND process shows no cpu

@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 import psutil
 
+from ..util import PROC_ERRORS
+
 # Classification table: kind -> (brew_names, process name needles)
 # brew_names: possible names under `brew services list` (first is the
 # preferred canonical one we'll pass to `brew services start/stop`).
@@ -100,22 +102,25 @@ def _sample_proc(p: psutil.Process) -> tuple[int, float]:
         cpu = p.cpu_percent(0.15)
         ncpu = psutil.cpu_count(logical=True) or 1
         return rss, cpu / ncpu
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+    except PROC_ERRORS:
         return 0, 0.0
 
 
 def _scan_processes() -> dict[str, list[psutil.Process]]:
     """Group live processes by our service kind."""
     groups: dict[str, list[psutil.Process]] = {}
-    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+    for p in psutil.process_iter(["pid", "name"]):
         try:
             name = p.info["name"] or ""
-            cmd = " ".join(p.info["cmdline"] or [])
+            try:
+                cmd = " ".join(p.cmdline() or [])
+            except PROC_ERRORS:
+                cmd = ""
             kind = _classify_proc(name, cmd)
             if kind is None:
                 continue
             groups.setdefault(kind, []).append(p)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except PROC_ERRORS:
             continue
     return groups
 
@@ -157,7 +162,7 @@ def collect() -> list[ServiceInfo]:
         if pid is not None:
             try:
                 rss, cpu = _sample_proc(psutil.Process(pid))
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+            except PROC_ERRORS:
                 pid = None
                 running = status.lower() == "started"
 
@@ -190,7 +195,7 @@ def collect() -> list[ServiceInfo]:
         rep = min(procs, key=lambda pr: pr.pid)
         try:
             display_name = rep.name() or kind
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except PROC_ERRORS:
             display_name = kind
         rss, cpu = _sample_proc(rep)
         out.append(

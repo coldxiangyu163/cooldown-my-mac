@@ -16,6 +16,8 @@ from pathlib import Path
 
 import psutil
 
+from ..util import PROC_ERRORS
+
 # Ordered by priority. A directory is a project root when it contains
 # at least one of these entries (file OR directory for ``.git``).
 MARKERS: tuple[str, ...] = (
@@ -112,16 +114,16 @@ def get_cwd(pid: int) -> str | None:
     """Return the cwd of `pid`. Best-effort: returns None on any failure."""
     try:
         p = psutil.Process(pid)
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+    except PROC_ERRORS:
         return None
     try:
         cwd = p.cwd()
         return cwd or None
     except psutil.AccessDenied:
         return _cwd_via_lsof(pid)
-    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+    except PROC_ERRORS:
         return None
-    except (OSError, RuntimeError):
+    except RuntimeError:
         return None
 
 

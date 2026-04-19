@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 import psutil
 
+from ..util import PROC_ERRORS
+
 # Patterns that identify AI CLIs / terminal multiplexers / bot gateways we
 # care about. Order matters: the first match wins.
 KIND_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
@@ -59,16 +61,23 @@ def collect(sample_interval: float = 0.25) -> list[ProcInfo]:
     psutil returning 0.0 for everything.
     """
     candidates: list[tuple[psutil.Process, str]] = []
-    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+    # NOTE: we intentionally *do not* pre-fetch "cmdline" via process_iter
+    # attrs, because on macOS some sysctl calls raise SystemError which
+    # would propagate out of the whole iterator. Instead we read cmdline
+    # inside each per-process try block, which is guarded by PROC_ERRORS.
+    for p in psutil.process_iter(["pid", "name"]):
         try:
             name = p.info["name"] or ""
-            cmd = " ".join(p.info["cmdline"] or [])
+            try:
+                cmd = " ".join(p.cmdline() or [])
+            except PROC_ERRORS:
+                cmd = ""
             kind = _classify(name, cmd)
             if kind is None:
                 continue
             candidates.append((p, kind))
             p.cpu_percent(None)  # prime CPU accounting
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except PROC_ERRORS:
             continue
 
     time.sleep(sample_interval)
@@ -87,11 +96,11 @@ def collect(sample_interval: float = 0.25) -> list[ProcInfo]:
                 name = p.name()
                 try:
                     cmd = " ".join(p.cmdline())
-                except psutil.AccessDenied:
+                except PROC_ERRORS:
                     cmd = name
                 try:
                     tty = p.terminal()
-                except (psutil.AccessDenied, AttributeError):
+                except (*PROC_ERRORS, AttributeError):
                     tty = None
             results.append(
                 ProcInfo(
@@ -108,7 +117,7 @@ def collect(sample_interval: float = 0.25) -> list[ProcInfo]:
                     user=username,
                 )
             )
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except PROC_ERRORS:
             continue
     return results
 

@@ -14,6 +14,8 @@ from dataclasses import dataclass
 
 import psutil
 
+from ..util import PROC_ERRORS
+
 # Ordered list: first match wins. Each entry is
 # (kind, predicate) where predicate returns True if the ancestor matches.
 # We keep it inline-free-functions to make the control flow explicit.
@@ -49,19 +51,19 @@ def _safe_fields(proc: psutil.Process) -> tuple[str, str, str, int]:
     """Return (name, exe, cmdline, ppid) swallowing psutil errors."""
     try:
         name = proc.name() or ""
-    except (psutil.Error, OSError):
+    except PROC_ERRORS:
         name = ""
     try:
         exe = proc.exe() or ""
-    except (psutil.Error, OSError):
+    except PROC_ERRORS:
         exe = ""
     try:
         cmdline = " ".join(proc.cmdline() or [])
-    except (psutil.Error, OSError):
+    except PROC_ERRORS:
         cmdline = ""
     try:
         ppid = proc.ppid()
-    except (psutil.Error, OSError):
+    except PROC_ERRORS:
         ppid = 0
     return name, exe, cmdline, ppid
 
@@ -72,18 +74,18 @@ def walk(pid: int, *, max_depth: int = 10) -> list[psutil.Process]:
     out: list[psutil.Process] = []
     try:
         p = psutil.Process(pid)
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+    except PROC_ERRORS:
         return out
     try:
         parent = p.parent()
-    except (psutil.Error, OSError):
+    except PROC_ERRORS:
         return out
     depth = 0
     while parent is not None and parent.pid != 0 and depth < max_depth:
         out.append(parent)
         try:
             parent = parent.parent()
-        except (psutil.Error, OSError):
+        except PROC_ERRORS:
             break
         depth += 1
     return out
@@ -182,19 +184,19 @@ def find_launcher(pid: int) -> Launcher:
     """
     try:
         target = psutil.Process(pid)
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+    except PROC_ERRORS:
         return Launcher(kind="unknown", label="unknown", pid=None)
 
     try:
         direct_ppid = target.ppid()
-    except (psutil.Error, OSError):
+    except PROC_ERRORS:
         direct_ppid = 0
 
     ancestors = walk(pid)
     for anc in ancestors:
         try:
             guess = classify_ancestor(anc)
-        except psutil.Error:
+        except PROC_ERRORS:
             continue
         if guess is None:
             continue

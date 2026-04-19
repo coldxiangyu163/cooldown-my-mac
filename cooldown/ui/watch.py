@@ -19,6 +19,8 @@ keep refresh latency low.
 """
 from __future__ import annotations
 
+import contextlib
+
 from rich.console import Console
 
 from ..collectors import memory as mem_mod
@@ -114,14 +116,39 @@ def _build_app_class():
             self.run_worker(self._gather, thread=True, exclusive=True, group="cooldown")
 
         def _gather(self) -> None:
-            sys_stats = sys_mod.collect(cpu_sample=0.1)
-            mem = mem_mod.collect()
-            therm = therm_mod.collect()
-            procs = procs_mod.collect(sample_interval=0.1)
-            procs_mod.enrich_idle(procs)
-            # Sort by RSS desc for the inventory view.
-            procs.sort(key=lambda p: -p.rss)
+            # Every collector call is isolated so one flaky probe (macOS
+            # sysctl EPERM, a transient Zombie, etc.) cannot take down the
+            # whole TUI. Worst case for a single tick is a partial refresh
+            # with the offending panel showing its last-known values.
+            try:
+                sys_stats = sys_mod.collect(cpu_sample=0.1)
+            except Exception as exc:  # noqa: BLE001
+                self.call_from_thread(self._set_error, "cpu", exc)
+                return
+            try:
+                mem = mem_mod.collect()
+            except Exception as exc:  # noqa: BLE001
+                self.call_from_thread(self._set_error, "mem", exc)
+                return
+            try:
+                therm = therm_mod.collect()
+            except Exception as exc:  # noqa: BLE001
+                self.call_from_thread(self._set_error, "thermal", exc)
+                return
+            try:
+                procs = procs_mod.collect(sample_interval=0.1)
+                procs_mod.enrich_idle(procs)
+                procs.sort(key=lambda p: -p.rss)
+            except Exception as exc:  # noqa: BLE001
+                self.call_from_thread(self._set_error, "cli", exc)
+                return
             self.call_from_thread(self._apply, sys_stats, mem, therm, procs)
+
+        def _set_error(self, panel_id: str, exc: BaseException) -> None:
+            with contextlib.suppress(Exception):
+                self.query_one(f"#{panel_id}", Static).update(
+                    f"[red]collector error[/]\n[dim]{type(exc).__name__}: {exc}[/]"
+                )
 
         def _apply(self, sys_stats, mem, therm, procs) -> None:
             self.query_one("#cpu", Static).update(_cpu_panel(sys_stats))
