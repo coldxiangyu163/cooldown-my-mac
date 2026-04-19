@@ -148,6 +148,83 @@ def test_classify_lang_and_framework():
     assert dev_mod._classify_framework("node", "/path/to/next-server main") == "next"
 
 
+# ---------------------------------------------------------------------------
+# Regression: 2026-04-19 — "(cwd unknown)" dominated `cool watch` because the
+# language classifier used raw substring match, so "--bundle-id=..." matched
+# "bun" and "*.node" native extensions matched "node". Make sure those
+# false positives stay dead and that the real boundaries still work.
+# ---------------------------------------------------------------------------
+
+def test_classify_lang_rejects_bundle_id_substring():
+    # WeChatAppEx real-world cmdline: "--bundle-id=com.tencent.xinwechat".
+    # The bare token "bun" must *not* match inside "bundle-id".
+    assert dev_mod._classify_lang(
+        "WeChatAppEx",
+        "/Applications/WeChat.app/... --bundle-id=5a4re8sf68.com.tencent.xinwechat",
+    ) is None
+
+
+def test_classify_lang_rejects_dot_node_loadables():
+    # Creative Cloud and plenty of other macOS native extensions expose
+    # loadable files ending in ".node". These are not Node.js processes.
+    assert dev_mod._classify_lang(
+        "Creative Cloud Content Manager.node", "/path/to/Creative Cloud Content Manager.node"
+    ) is None
+
+
+def test_classify_lang_still_catches_real_node_invocations():
+    # argv0 basename match.
+    assert dev_mod._classify_lang(
+        "node", "/opt/homebrew/Cellar/node/23.11.0/bin/node server.js"
+    ) == "node"
+    # Name = "bun" exactly.
+    assert dev_mod._classify_lang("bun", "/usr/local/bin/bun run dev") == "bun"
+    # Whole-word match in cmdline.
+    assert dev_mod._classify_lang(
+        "some-wrapper", "exec node /path/to/script.js"
+    ) == "node"
+    # Tool-needle substring match still works.
+    assert dev_mod._classify_lang("x", "pytest -q") == "python"
+
+
+def test_synthesize_app_project_for_app_path():
+    proj = dev_mod._synthesize_app_project(
+        "WeChatAppEx",
+        "/Applications/WeChat.app/Contents/MacOS/WeChatAppEx.app/... --bundle-id=...",
+        cwd="/Applications/WeChat.app/Contents/MacOS",
+    )
+    assert proj is not None
+    assert proj.name == "(app: WeChat)"
+    assert str(proj.root).endswith("/WeChat.app")
+
+
+def test_synthesize_app_project_for_named_helper_without_bundle_path():
+    proj = dev_mod._synthesize_app_project(
+        "Obsidian Helper (Renderer)", "", cwd="/"
+    )
+    assert proj is not None
+    assert proj.name == "(app: Obsidian)"
+
+
+def test_synthesize_app_project_returns_none_for_regular_dev_proc():
+    assert dev_mod._synthesize_app_project(
+        "node", "/usr/bin/node server.js", cwd="/Users/me/my-project"
+    ) is None
+
+
+def test_bucket_orphan_for_launchd_orphan_at_root():
+    proj = dev_mod._bucket_orphan_project(cwd="/", is_orphan=True)
+    assert proj is not None
+    assert proj.name == "(orphan)"
+
+    # Non-orphan → None even at root.
+    assert dev_mod._bucket_orphan_project(cwd="/", is_orphan=False) is None
+    # Orphan but with real cwd → leave for the regular project lookup.
+    assert dev_mod._bucket_orphan_project(
+        cwd="/Users/me/project", is_orphan=True
+    ) is None
+
+
 def test_is_self_excludes_cool_cli():
     assert dev_mod._is_self("python3", "python3 -m cooldown.cli dev")
     assert dev_mod._is_self("cool", "/Users/x/.venv/bin/cool dev")

@@ -8,6 +8,7 @@ the presentation layer.
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,23 +22,68 @@ from .ancestry import Launcher
 from .project import Project
 
 # ---------------------------------------------------------------------------
-# Language patterns. Order matters: the first language whose needles appear
-# in (name + cmdline) wins.
+# Language patterns.
+#
+# We split the old single-list into two groups so we can match them with
+# *different strictness*:
+#
+# - ``BARE_LANG_NAMES`` — short, collision-prone tokens like ``node`` or
+#   ``bun``. Previously matched as raw substrings, which mis-classified
+#   Electron apps (``--bundle-id=...`` → ``bun``) and native macOS loadable
+#   bundles (``Creative Cloud Content Manager.node`` → ``node``). Now these
+#   must match the process *name* exactly OR appear as argv[0]'s basename
+#   OR show up as a whole word token in cmdline.
+#
+# - ``TOOL_NEEDLES`` — longer, project-specific tokens like ``uvicorn`` or
+#   ``next-server``. Substring match in cmdline is fine because these are
+#   unique enough that accidental collisions are rare.
+#
+# Order inside each group doesn't matter thanks to the strictness rules,
+# but we still keep node-ish entries first to preserve test ergonomics.
 # ---------------------------------------------------------------------------
-LANG_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
-    # Keep node before python so "node /path/to/python/.bin" quirks don't
-    # end up misclassified.
-    ("node", ("node", "nodejs", "npm", "pnpm", "yarn", "npx", "corepack")),
-    ("deno", ("deno",)),
-    ("bun", ("bun",)),
-    ("python", ("python", "python3", "uvicorn", "gunicorn", "celery", "jupyter", "streamlit", "pytest")),
-    ("ruby", ("ruby", "rails", "rake", "bundle", "puma", "sidekiq")),
-    ("go", ("go run", "/go/bin/", "gopls")),
-    ("rust", ("cargo", "rustc", "/target/debug/", "/target/release/", "rust-analyzer")),
-    ("java", ("java", "gradle", "mvn", "kotlin")),
-    ("php", ("php", "php-fpm", "artisan")),
-    ("dotnet", ("dotnet", "mono")),
-]
+
+BARE_LANG_NAMES: dict[str, tuple[str, ...]] = {
+    "node":   ("node", "nodejs"),
+    "deno":   ("deno",),
+    "bun":    ("bun",),
+    "python": ("python", "python3", "pypy", "pypy3"),
+    "ruby":   ("ruby",),
+    "go":     ("go",),
+    "rust":   ("rustc",),
+    "java":   ("java",),
+    "php":    ("php", "php-fpm"),
+    "dotnet": ("dotnet", "mono"),
+}
+
+TOOL_NEEDLES: dict[str, tuple[str, ...]] = {
+    "node":   ("npm ", "pnpm ", "yarn ", "npx ", "corepack"),
+    "python": ("uvicorn", "gunicorn", "celery", "jupyter", "streamlit", "pytest"),
+    "ruby":   ("rails ", "rake ", "bundle exec", "puma", "sidekiq"),
+    "go":     ("go run", "gopls"),
+    "rust":   ("cargo ", "rust-analyzer"),
+    "java":   ("gradle", "mvn ", "kotlin"),
+    "php":    ("artisan",),
+}
+
+# Process names that represent loadable files (native add-ons, scripts)
+# rather than live language runtimes. Never classify these.
+REJECT_NAME_SUFFIXES: tuple[str, ...] = (
+    ".node", ".py", ".pyc", ".pyo", ".rb", ".rbc", ".sh",
+)
+
+# Cached word-boundary regex for a single token.
+_WORD = re.compile(r"[A-Za-z0-9_]+")
+
+def _first_argv0_basename(cmd: str) -> str:
+    head = cmd.split(" ", 1)[0] if cmd else ""
+    return head.rsplit("/", 1)[-1]
+
+def _is_whole_word(hay: str, needle: str) -> bool:
+    """True iff ``needle`` appears as a whole word in ``hay``.
+
+    "bun" in "bundle" -> False.  "bun" in "/bin/bun --args" -> True.
+    """
+    return any(match.group(0) == needle for match in _WORD.finditer(hay))
 
 # Framework needles, grouped by which lang(s) they are relevant for.
 # Each tuple is (framework_label, (needles,), frozenset(langs_allowed)).
@@ -113,10 +159,30 @@ class DevProc:
 
 
 def _classify_lang(name: str, cmdline: str) -> str | None:
-    hay = f" {name.lower()} {cmdline.lower()} "
-    for lang, needles in LANG_PATTERNS:
-        for n in needles:
-            if n in hay:
+    name_l = name.lower()
+    # Loadable-file names like "Creative Cloud Content Manager.node" are
+    # not live runtimes — drop them early.
+    for suffix in REJECT_NAME_SUFFIXES:
+        if name_l.endswith(suffix):
+            return None
+
+    cmd_l = cmdline.lower()
+    argv0_base = _first_argv0_basename(cmd_l)
+
+    # Pass 1: bare language tokens. Must match name exactly, be the
+    # basename of argv[0], or appear as a whole word in cmdline. No more
+    # "--bundle-id=..." false positives.
+    for lang, names in BARE_LANG_NAMES.items():
+        for needle in names:
+            if name_l == needle or argv0_base == needle:
+                return lang
+            if _is_whole_word(cmd_l, needle):
+                return lang
+
+    # Pass 2: unique tool needles. Substring in cmdline is fine here.
+    for lang, needles in TOOL_NEEDLES.items():
+        for needle in needles:
+            if needle in cmd_l:
                 return lang
     return None
 
@@ -129,6 +195,59 @@ def _classify_framework(lang: str, cmdline: str) -> str | None:
         for n in needles:
             if n.lower() in hay:
                 return label
+    return None
+
+
+_APP_BUNDLE_RE = re.compile(r"/([^/]+?)\.app/")
+
+
+def _synthesize_app_project(name: str, cmdline: str, cwd: str | None) -> Project | None:
+    """Best-effort attribution for processes that have no project marker
+    on disk but are clearly owned by a macOS application.
+
+    Catches the 90% case of "(cwd unknown)" noise in ``Top Projects by
+    RSS``: Electron helpers (VS Code / Obsidian / WeChatAppEx / Notion
+    / Slack), native app runtimes shelling out to Node or Python, and
+    anything whose argv path walks through an ``.app`` bundle.
+
+    Returns a synthetic ``Project`` labelled ``(app: <AppName>)`` so the
+    UI can distinguish it from real on-disk projects, while still
+    offering a *one-row-per-app* grouping instead of 20 scattered
+    helpers under ``(cwd unknown)``.
+    """
+    for source in (cmdline or "", cwd or ""):
+        if not source:
+            continue
+        m = _APP_BUNDLE_RE.search(source)
+        if m:
+            app_name = m.group(1).strip()
+            if app_name:
+                bundle_root = Path(source.split(".app/", 1)[0] + ".app")
+                return Project(
+                    root=bundle_root, name=f"(app: {app_name})", markers=["<bundle>"]
+                )
+    # Fallback: the executable name itself says "<App> Helper (...)".
+    if " Helper" in name:
+        app = name.split(" Helper", 1)[0].strip()
+        if app:
+            return Project(
+                root=Path(cwd or "/"), name=f"(app: {app})", markers=["<helper>"]
+            )
+    return None
+
+
+def _bucket_orphan_project(cwd: str | None, is_orphan: bool) -> Project | None:
+    """Collapse the remaining stragglers (cwd=/ or cwd=$HOME orphan
+    processes) into a single ``(orphan)`` bucket rather than leaving them
+    as anonymous ``(cwd unknown)`` lines. Only applied when the process
+    is a launchd-orphan *and* we have no better attribution.
+    """
+    if not is_orphan:
+        return None
+    if cwd in (None, "", "/", str(Path.home())):
+        return Project(
+            root=Path(cwd or "/"), name="(orphan)", markers=["<orphan>"]
+        )
     return None
 
 
@@ -219,6 +338,12 @@ def collect(sample_interval: float = 0.2) -> list[DevProc]:
         proj = project_mod.find_root(cwd) if cwd else None
         launcher = ancestry_mod.find_launcher(p.pid)
         is_orphan = ppid == 1 and launcher.kind == "launchd"
+        # If no real on-disk project, try to attribute to an owning .app
+        # bundle (Electron helpers etc.) or bucket orphan system procs.
+        if proj is None:
+            proj = _synthesize_app_project(name, cmd, cwd)
+        if proj is None:
+            proj = _bucket_orphan_project(cwd, is_orphan)
 
         out.append(
             DevProc(
