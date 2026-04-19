@@ -207,9 +207,23 @@ _APP_BUNDLE_RE = re.compile(r"/([^/]+?)\.app/")
 # ---------------------------------------------------------------------------
 
 # npx / npm global cache: /Users/.../.npm/_npx/<hash>/node_modules/<pkg>/...
-_NPX_CACHE_RE = re.compile(r"/\.npm/_npx/[0-9a-f]+/node_modules/((?:@[^/\s]+/)?[^/\s]+)")
+# Two shapes in the wild:
+#   .../node_modules/<pkg>/dist/index.js            ← install target
+#   .../node_modules/.bin/<pkg>                     ← symlink shim
+# The old regex captured ".bin" literally and produced a useless "(npx: .bin)"
+# bucket, so skip past any ".bin/" segment.
+_NPX_CACHE_RE = re.compile(
+    r"/\.npm/_npx/[0-9a-f]+/node_modules/(?:\.bin/)?((?:@[^/\s]+/)?[^/\s]+)"
+)
 # Fallback for live shells — "npm exec <pkg>" or "npx <pkg>".
 _NPM_EXEC_RE = re.compile(r"(?:^|\s)(?:npx|npm\s+exec)(?:\s+-\S+)*\s+((?:@[^/\s]+/)?[^\s@]+)")
+
+# Bare executable names that are always MCP servers / npx tools which have
+# `exec()`d over their launcher, so neither the _npx cache path nor `npm exec`
+# is visible in their current cmdline. Match by process name.
+_MCP_TOOL_NAME_RE = re.compile(
+    r"^(?:chrome-devtools-mcp|mcp(?:-server)?-[\w-]+|[\w-]+-mcp(?:-server)?)$"
+)
 
 # VS Code extensions:
 # /Users/<u>/.vscode/extensions/<publisher>.<name>-<version>[-arch]/...
@@ -266,22 +280,39 @@ def _walk_past_monorepo(proj: Project) -> Project:
     return Project(root=grand, name=grand.name, markers=["<monorepo>"])
 
 
-def _synthesize_npx_project(cmdline: str) -> Project | None:
-    """Attribute npx-cache / `npm exec <pkg>` to ``(npx: <pkg>)``."""
-    if not cmdline:
-        return None
-    m = _NPX_CACHE_RE.search(cmdline)
-    if m:
-        pkg = m.group(1)
-        return Project(
-            root=Path("/"), name=f"(npx: {pkg})", markers=["<npx>"]
-        )
-    m = _NPM_EXEC_RE.search(cmdline)
-    if m:
-        pkg = m.group(1)
-        return Project(
-            root=Path("/"), name=f"(npx: {pkg})", markers=["<npx>"]
-        )
+def _synthesize_npx_project(cmdline: str, name: str = "") -> Project | None:
+    """Attribute npx-cache / `npm exec <pkg>` / bare MCP tools to
+    ``(npx: <pkg>)``.
+
+    Three detection paths, in descending specificity:
+      1. Process cmdline walks through ``~/.npm/_npx/<hash>/node_modules/``
+         (handling both ``<pkg>/...`` install targets and ``.bin/<pkg>``
+         symlinks).
+      2. Cmdline begins with ``npx <pkg>`` or ``npm exec <pkg>``.
+      3. Process name alone matches a known MCP-tool naming convention
+         (``chrome-devtools-mcp``, ``mcp-server-*``, ``*-mcp``) — these
+         are npx tools that have ``exec()``d over their launcher so the
+         original path has been scrubbed from argv.
+    """
+    if cmdline:
+        m = _NPX_CACHE_RE.search(cmdline)
+        if m and m.group(1) not in (".", "..", "", ".bin"):
+            return Project(
+                root=Path("/"), name=f"(npx: {m.group(1)})", markers=["<npx>"]
+            )
+        m = _NPM_EXEC_RE.search(cmdline)
+        if m:
+            return Project(
+                root=Path("/"), name=f"(npx: {m.group(1)})", markers=["<npx>"]
+            )
+    # Check both process name and argv[0] basename — when npx exec()s over
+    # its launcher, psutil reports name='node' but argv[0] has been
+    # rewritten to the tool name.
+    for candidate in (name, _first_argv0_basename(cmdline)):
+        if candidate and _MCP_TOOL_NAME_RE.match(candidate):
+            return Project(
+                root=Path("/"), name=f"(npx: {candidate})", markers=["<mcp>"]
+            )
     return None
 
 
@@ -554,18 +585,26 @@ def collect(sample_interval: float = 0.2) -> list[DevProc]:
 
         framework = _classify_framework(lang, cmd)
         cwd = project_mod.get_cwd(p.pid)
-        proj = project_mod.find_root(cwd) if cwd else None
-        if proj is not None:
-            proj = _walk_past_monorepo(proj)
+        # npx / npm-exec tools are *not* part of whatever project they
+        # happen to be launched from — they run out of the global _npx
+        # cache and just inherit the invoker's cwd. Attribute them to
+        # (npx: <pkg>) *before* looking at cwd so MCP servers spawned by
+        # claude / droid / cursor don't inflate the current project's
+        # bucket. Real repo-local tools (e.g., `node_modules/.bin/vite`)
+        # never match the _npx cache path and fall through to find_root.
+        proj = _synthesize_npx_project(cmd, name)
+        if proj is None and cwd:
+            proj = project_mod.find_root(cwd)
+            if proj is not None:
+                proj = _walk_past_monorepo(proj)
         launcher = ancestry_mod.find_launcher(p.pid)
         is_orphan = ppid == 1 and launcher.kind == "launchd"
         # If no real on-disk project, try progressively weaker fallbacks so
         # that every dev process gets *some* attribution and the
-        # "(cwd unknown)" bucket stays empty.
+        # "(cwd unknown)" bucket stays empty. (npx is resolved above,
+        # before find_root.)
         if proj is None:
             proj = _synthesize_app_project(name, cmd, cwd)
-        if proj is None:
-            proj = _synthesize_npx_project(cmd)
         if proj is None:
             proj = _synthesize_vscode_ext_project(cmd, cwd)
         if proj is None:

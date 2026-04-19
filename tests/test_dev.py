@@ -262,6 +262,48 @@ def test_synthesize_npx_ignores_regular_node_cmdline():
     assert dev_mod._synthesize_npx_project("node /Users/me/project/server.js") is None
 
 
+def test_synthesize_npx_skips_dotbin_shim():
+    # ~/.npm/_npx/<hash>/node_modules/.bin/<tool> is the symlink shim, not
+    # the real package dir. Make sure we skip past ".bin" to the tool.
+    proj = dev_mod._synthesize_npx_project(
+        "node /Users/me/.npm/_npx/de2bd410102f5eda/node_modules/.bin/mcp-server-sequential-thinking"
+    )
+    assert proj is not None
+    assert proj.name == "(npx: mcp-server-sequential-thinking)"
+
+
+def test_synthesize_npx_by_process_name_after_exec():
+    # When npx tools exec() over their launcher, psutil reports name='node'
+    # but argv[0] is rewritten. Catch both paths.
+    proj = dev_mod._synthesize_npx_project(
+        "chrome-devtools-mcp  ", name="node"
+    )
+    assert proj is not None
+    assert proj.name == "(npx: chrome-devtools-mcp)"
+
+    # Name-only match (name was preserved).
+    proj = dev_mod._synthesize_npx_project("", name="mcp-server-puppeteer")
+    assert proj is not None
+    assert proj.name == "(npx: mcp-server-puppeteer)"
+
+    # Ensure plain 'node' / 'python' never masquerade as npx.
+    assert dev_mod._synthesize_npx_project("node server.js", name="node") is None
+
+
+def test_npx_attribution_wins_over_find_root():
+    # Direct wiring check: an _npx cache path always returns a project so
+    # collect()'s order of operations can skip find_root for MCP tools
+    # spawned by claude / droid / cursor. (Simulates a developer whose
+    # shell cwd is inside a real repo, but the tool being run is an
+    # ephemeral npx binary — the tool should NOT inflate the repo's
+    # memory footprint.)
+    proj = dev_mod._synthesize_npx_project(
+        "node /Users/me/.npm/_npx/aaaabbbbccccdddd/node_modules/some-tool/dist/index.js"
+    )
+    assert proj is not None
+    assert proj.name == "(npx: some-tool)"
+
+
 def test_synthesize_vscode_extension():
     proj = dev_mod._synthesize_vscode_ext_project(
         "/Users/me/.vscode/extensions/ms-python.vscode-python-envs-1.20.1-darwin-arm64/"
