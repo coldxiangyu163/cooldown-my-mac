@@ -55,5 +55,36 @@ def bar(percent: float, width: int = 20, filled: str = "█", empty: str = "░"
     return filled * fill + empty * (width - fill)
 
 
+# 8-step block characters for unicode mini-bars. Index by height level
+# 0..8 where 0 produces a thin baseline dot so an empty sample is still
+# visible (and a series of empties forms a flat line rather than gaps).
+_SPARK_CHARS = " ▁▂▃▄▅▆▇█"
+
+
+def sparkline(values: list[float], *, hi: float = 100.0, width: int | None = None) -> str:
+    """Render values as a unicode mini-bar histogram.
+
+    Each value is bucketed into one of 8 height levels relative to ``hi``
+    (which defaults to 100, the typical "percent" upper bound). When
+    ``width`` is given, the input is right-aligned and truncated/padded
+    so the result is exactly ``width`` chars — useful for stable layouts.
+    """
+    if not values:
+        return ""
+    if width is not None:
+        values = values[-width:]
+    out = []
+    for v in values:
+        if v <= 0:
+            out.append("▁")
+            continue
+        ratio = max(0.0, min(1.0, v / hi))
+        idx = max(1, min(8, int(round(ratio * 8))))
+        out.append(_SPARK_CHARS[idx])
+    if width is not None and len(out) < width:
+        out = [" "] * (width - len(out)) + out
+    return "".join(out)
+
+
 def now_ts() -> float:
     return time.time()
