@@ -10,6 +10,7 @@ processes owned by other users or with SIP-protected cwds).
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,17 +47,23 @@ class Project:
     markers: list[str]
 
 
+_MARKER_SET = frozenset(MARKERS)
+
+
 def _detect_markers(directory: Path) -> list[str]:
     """Return the subset of known markers present at `directory`, in the
-    canonical priority order."""
-    found: list[str] = []
-    for m in MARKERS:
-        try:
-            if (directory / m).exists():
-                found.append(m)
-        except OSError:
-            continue
-    return found
+    canonical priority order.
+
+    Uses one ``os.scandir`` per directory instead of ``len(MARKERS)``
+    independent ``.exists()`` stat calls — material when ``find_root``
+    walks 10 ancestor levels for every listening port pid.
+    """
+    try:
+        with os.scandir(directory) as it:
+            present = {entry.name for entry in it if entry.name in _MARKER_SET}
+    except OSError:
+        return []
+    return [m for m in MARKERS if m in present]
 
 
 def find_root(cwd: str | Path, *, max_depth: int = 10) -> Project | None:

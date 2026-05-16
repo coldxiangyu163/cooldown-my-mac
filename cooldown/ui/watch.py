@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -66,6 +67,8 @@ from .dashboard import (
     _mem_content,
     _thermal_content,
 )
+
+log = logging.getLogger("cooldown.watch")
 
 # ---------------------------------------------------------------------------
 # Data-table row helpers (pure functions — easy to unit-test)
@@ -288,6 +291,88 @@ def render_subtitle(
 
 
 # ---------------------------------------------------------------------------
+# Bulk port attribution
+# ---------------------------------------------------------------------------
+# Walking the ancestor chain + reading cwd for every listening pid in the
+# slow tick used to be the worst single hotspot in this dashboard: N
+# independent psutil.Process(...) calls + N classify_ancestor walks + N
+# project.find_root scans of the filesystem.  Two layers of caching here
+# collapse that to roughly O(unique-ancestor-pids + unique-cwds):
+#
+#   * `_classify_cache` memoises classify_ancestor() by ancestor pid so the
+#     iTerm / tmux / shell ancestors shared by every child are only walked
+#     once per slow tick.
+#   * `_root_cache` memoises project.find_root() by cwd string so 10
+#     subprocesses sharing the same project root only stat the marker set
+#     once.
+
+def _attribute_ports(pids: set[int]) -> tuple[dict[int, str], dict[int, str]]:
+    """Return (launchers, projects) keyed by pid for the supplied set.
+
+    Errors per pid degrade silently to ``"-"`` so a single PROC_ERRORS
+    blip never wipes out the table.
+    """
+    try:
+        from ..collectors import ancestry as ancestry_mod  # noqa: PLC0415
+        from ..collectors import project as project_mod  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        log.exception("watch: ancestry/project import failed")
+        return {pid: "-" for pid in pids}, {pid: "-" for pid in pids}
+
+    launchers: dict[int, str] = {}
+    projects: dict[int, str] = {}
+
+    _classify_cache: dict[int, Any] = {}
+
+    def _classify(anc) -> Any:
+        cached = _classify_cache.get(anc.pid)
+        if cached is not None:
+            return cached
+        try:
+            guess = ancestry_mod.classify_ancestor(anc)
+        except Exception:  # noqa: BLE001
+            guess = None
+        _classify_cache[anc.pid] = guess
+        return guess
+
+    _root_cache: dict[str, Any] = {}
+
+    def _project_for(pid: int) -> str:
+        try:
+            cwd = project_mod.get_cwd(pid)
+        except Exception:  # noqa: BLE001
+            return "-"
+        if not cwd:
+            return "-"
+        if cwd in _root_cache:
+            proj = _root_cache[cwd]
+        else:
+            try:
+                proj = project_mod.find_root(cwd)
+            except Exception:  # noqa: BLE001
+                proj = None
+            _root_cache[cwd] = proj
+        return proj.name if proj else "-"
+
+    for pid in pids:
+        try:
+            ancestors = ancestry_mod.walk(pid)
+            launcher_label = "-"
+            for anc in ancestors:
+                guess = _classify(anc)
+                if guess is None or guess.kind == "shell":
+                    continue
+                launcher_label = guess.label or guess.kind or "-"
+                break
+            launchers[pid] = launcher_label
+        except Exception:  # noqa: BLE001
+            launchers[pid] = "-"
+        projects[pid] = _project_for(pid)
+
+    return launchers, projects
+
+
+# ---------------------------------------------------------------------------
 # Textual App (built lazily so `import cooldown.ui.watch` is cheap)
 # ---------------------------------------------------------------------------
 
@@ -459,21 +544,25 @@ def _build_app_class():
                 sys_stats = sys_mod.collect(cpu_sample=0.2)
                 self.call_from_thread(self._apply_cpu, sys_stats)
             except Exception as exc:  # noqa: BLE001
+                log.exception("watch fast-tick: cpu collector failed")
                 self.call_from_thread(self._set_error, "cpu", exc)
             try:
                 mem = mem_mod.collect()
                 self.call_from_thread(self._apply_mem, mem)
             except Exception as exc:  # noqa: BLE001
+                log.exception("watch fast-tick: memory collector failed")
                 self.call_from_thread(self._set_error, "mem", exc)
             try:
                 therm = therm_mod.collect()
                 self.call_from_thread(self._apply_thermal, therm)
             except Exception as exc:  # noqa: BLE001
+                log.exception("watch fast-tick: thermal collector failed")
                 self.call_from_thread(self._set_error, "thermal", exc)
             try:
                 batt = batt_mod.collect()
                 self.call_from_thread(self._apply_battery, batt)
             except Exception as exc:  # noqa: BLE001
+                log.exception("watch fast-tick: battery collector failed")
                 self.call_from_thread(self._set_error, "battery", exc)
             try:
                 procs = procs_mod.collect(sample_interval=0.1)
@@ -482,6 +571,7 @@ def _build_app_class():
                 ai_rows = build_ai_rows(procs)
                 self.call_from_thread(self._apply_ai, procs, ai_rows)
             except Exception as exc:  # noqa: BLE001
+                log.exception("watch fast-tick: procs collector failed")
                 self.call_from_thread(self._set_table_error, "ai", exc)
 
         def _gather_slow(self) -> None:
@@ -490,33 +580,15 @@ def _build_app_class():
                 rows = build_project_rows(devs)
                 self.call_from_thread(self._apply_projects, rows)
             except Exception as exc:  # noqa: BLE001
+                log.exception("watch slow-tick: projects panel failed")
                 self.call_from_thread(self._set_table_error, "projects", exc)
             try:
                 entries = ports_mod.collect()
-                # Best-effort attribution — lazy to keep slow-tick below 1s.
-                launchers: dict[int, str] = {}
-                projects: dict[int, str] = {}
-                try:
-                    from ..collectors import ancestry as ancestry_mod  # noqa: PLC0415
-                    from ..collectors import project as project_mod  # noqa: PLC0415
-                    for pid in {e.pid for e in entries}:
-                        try:
-                            lnc = ancestry_mod.find_launcher(pid)
-                            launchers[pid] = getattr(lnc, "label", None) or getattr(
-                                lnc, "kind", "-"
-                            )
-                        except Exception:  # noqa: BLE001
-                            launchers[pid] = "-"
-                        try:
-                            proj = project_mod.lookup(pid)
-                            projects[pid] = proj.name if proj else "-"
-                        except Exception:  # noqa: BLE001
-                            projects[pid] = "-"
-                except Exception:  # noqa: BLE001
-                    pass
+                launchers, projects = _attribute_ports({e.pid for e in entries})
                 rows = build_port_rows(entries, launchers, projects)
                 self.call_from_thread(self._apply_ports, rows)
             except Exception as exc:  # noqa: BLE001
+                log.exception("watch slow-tick: ports panel failed")
                 self.call_from_thread(self._set_table_error, "ports", exc)
 
         # ---------------------------------------------------------- apply (UI thread)

@@ -87,6 +87,9 @@ def _is_whole_word(hay: str, needle: str) -> bool:
 
 # Framework needles, grouped by which lang(s) they are relevant for.
 # Each tuple is (framework_label, (needles,), frozenset(langs_allowed)).
+# Needles are kept as authored for readability; we pre-lowercase them once
+# at module load (see _FRAMEWORK_PATTERNS_LC below) so the hot path in
+# _classify_framework() doesn't redo it per process.
 FRAMEWORK_PATTERNS: list[tuple[str, tuple[str, ...], frozenset[str]]] = [
     # --- node ecosystem ---------------------------------------------
     ("next", ("next-server", "next dev", "next start", "next-router-worker"), frozenset({"node"})),
@@ -187,13 +190,19 @@ def _classify_lang(name: str, cmdline: str) -> str | None:
     return None
 
 
+_FRAMEWORK_PATTERNS_LC: list[tuple[str, tuple[str, ...], frozenset[str]]] = [
+    (label, tuple(n.lower() for n in needles), allowed)
+    for label, needles, allowed in FRAMEWORK_PATTERNS
+]
+
+
 def _classify_framework(lang: str, cmdline: str) -> str | None:
     hay = cmdline.lower()
-    for label, needles, allowed in FRAMEWORK_PATTERNS:
+    for label, needles, allowed in _FRAMEWORK_PATTERNS_LC:
         if lang not in allowed:
             continue
         for n in needles:
-            if n.lower() in hay:
+            if n in hay:
                 return label
     return None
 
@@ -645,17 +654,27 @@ def enrich_idle(devs: list[DevProc]) -> None:
     of the AI-CLI specific ``procs`` collector.
     """
     now = time.time()
+    # Many dev processes share a cwd (monorepo subpackages, multiple node
+    # workers in the same repo). Cache stat() per cwd so 30 devs in one
+    # project cost one syscall.
+    _cwd_cache: dict[str, tuple[float, float] | None] = {}
     for d in devs:
         candidates: list[float] = []
         # No tty info on DevProc — rely on cwd mtime as a weak signal and
         # the cpu/age heuristic for the rest.
         if d.cwd:
-            try:
-                st = os.stat(d.cwd)
-                candidates.append(now - st.st_atime)
-                candidates.append(now - st.st_mtime)
-            except OSError:
-                pass
+            if d.cwd in _cwd_cache:
+                cached = _cwd_cache[d.cwd]
+            else:
+                try:
+                    st = os.stat(d.cwd)
+                    cached = (st.st_atime, st.st_mtime)
+                except OSError:
+                    cached = None
+                _cwd_cache[d.cwd] = cached
+            if cached is not None:
+                candidates.append(now - cached[0])
+                candidates.append(now - cached[1])
         if not candidates:
             if d.cpu_percent < 1.0:
                 candidates.append(min(d.age, 600.0))
@@ -713,14 +732,22 @@ def stale(devs: list[DevProc], *, project_age_days: int = 7) -> list[DevProc]:
     - its idle_seconds (when known) is ≥ 1800 s (30 min).
     """
     cutoff = time.time() - project_age_days * 86400.0
+    # Many dev processes share the same project root; cache the stat()
+    # so 50 procs in one repo cost one syscall instead of 50.
+    _mtime_cache: dict[str, float | None] = {}
     out: list[DevProc] = []
     for d in devs:
         aged = d.is_orphan
         if not aged and d.project is not None:
-            try:
-                mt = Path(d.project.root).stat().st_mtime
-            except OSError:
-                mt = None
+            root_key = str(d.project.root)
+            if root_key in _mtime_cache:
+                mt = _mtime_cache[root_key]
+            else:
+                try:
+                    mt = Path(d.project.root).stat().st_mtime
+                except OSError:
+                    mt = None
+                _mtime_cache[root_key] = mt
             if mt is not None and mt < cutoff:
                 aged = True
         if not aged:

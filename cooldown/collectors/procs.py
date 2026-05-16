@@ -191,16 +191,26 @@ def enrich_idle(procs: list[ProcInfo]) -> None:
     A low CPU percent over our sample AND an old tty atime implies idle.
     """
     now = time.time()
+    # All procs sharing a shell pipeline share a tty (one iTerm tab can
+    # easily host 5+ AI CLIs). Cache the stat() so we don't redo it per
+    # process — failure is cached as None so retries don't pile up either.
+    _tty_cache: dict[str, tuple[float, float] | None] = {}
     for p in procs:
         candidates: list[float] = []
         if p.tty:
             tty_path = p.tty if p.tty.startswith("/") else f"/dev/{p.tty}"
-            try:
-                st = os.stat(tty_path)
-                candidates.append(now - st.st_atime)
-                candidates.append(now - st.st_mtime)
-            except OSError:
-                pass
+            if tty_path in _tty_cache:
+                cached = _tty_cache[tty_path]
+            else:
+                try:
+                    st = os.stat(tty_path)
+                    cached = (st.st_atime, st.st_mtime)
+                except OSError:
+                    cached = None
+                _tty_cache[tty_path] = cached
+            if cached is not None:
+                candidates.append(now - cached[0])
+                candidates.append(now - cached[1])
         # Fallback: if CPU is quiet, use a fraction of the process age so
         # newly spawned processes do not look idle for hours just because we
         # have no tty reading.
