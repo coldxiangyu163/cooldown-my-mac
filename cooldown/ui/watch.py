@@ -320,35 +320,34 @@ def render_subtitle(
         # when there is nothing to react to.
     if procs is not None:
         signals.append(f"[dim]CLIs[/] [cyan]{len(procs)}[/]")
-    if last_op:
-        action, ts = last_op
-        ago = max(0, time.time() - ts)
-        signals.append(f"[dim]last {action} · {human_duration(ago)} ago[/]")
+    # last_op intentionally NOT surfaced here — it was debug/meta
+    # noise that pushed the bar density up. The oplog is still
+    # written and `cool log` can show it for forensics.
     if signals:
         chunks.append("  ".join(signals))
 
-    # Chunk 3 — Identity. Single dim run; the test suite pins the literal
-    # substrings (MacBook Pro / M1 Max / 32GPU / 8P+2E / 64.0GB RAM /
-    # 2.0TB disk / macOS 15.2) so any reformat has to preserve them.
+    # Chunk 3 — Identity. Trimmed to the essentials the user actually
+    # references during a session (model + chip + topology + RAM +
+    # macOS). Dropped disk total + uptime because they're rarely
+    # relevant during live monitoring and they pushed the bar past
+    # typical terminal widths, hiding the clock + cadence at the
+    # right edge.
     if host is not None:
         chip = host.chip.replace("Apple ", "")
         gpu = f", {host.gpu_cores}GPU" if host.gpu_cores else ""
         ident_bits = [
             f"{host.model} · {chip}{gpu} {host.topology}",
             f"{human_bytes(host.ram_bytes)} RAM",
-            f"{human_bytes(host.disk_total_bytes)} disk",
             f"macOS {host.macos_version}",
         ]
-        if sys_stats:
-            ident_bits.append(f"up {human_duration(sys_stats.uptime)}")
         chunks.append(f"[dim]{' · '.join(ident_bits)}[/]")
 
-    # Chunk 4 — Meta strip. Mode flags get an inline dot glyph so they
-    # are recognisable as state at a glance even out of the corner of
-    # the eye. Clock anchors the right edge — same place every C-end OS
-    # status bar puts it (macOS menu bar, Windows taskbar, iOS), so the
-    # eye finds it without scanning.
-    meta_bits = [f"[dim]⟳ {fast_interval}s/{slow_interval}s[/]"]
+    # Chunk 4 — Meta strip. Cadence (⟳ Xs/Ys) was dropped — it's a
+    # static configuration value, not live data, and was crowding the
+    # bar. Mode flags (paused / dry-run) keep their glyph so the user
+    # can see at-a-glance they're in a non-default state. Clock anchors
+    # the right edge — same place every C-end OS status bar puts it.
+    meta_bits: list[str] = []
     if paused:
         meta_bits.append("[yellow]◼ paused[/]")
     if dry_run:
@@ -476,6 +475,7 @@ def _build_app_class():
         #body {
             layout: grid;
             grid-size: 2 4;
+            grid-rows: auto auto 1fr 1fr;
             grid-gutter: 1 2;
             padding: 1 2;
             height: 1fr;
@@ -483,12 +483,19 @@ def _build_app_class():
 
         /* Default panel — quiet muted border, generous inner padding.
            Border colour comes from $surface-lighten-2 (not $primary) so
-           the four info panels visually recede until you focus one. */
+           the four info panels visually recede until you focus one.
+           Info panels size to their content (height: auto) so empty
+           space under Thermal/Battery flows to the tables instead of
+           leaving dead air. Tables still get height: 1fr via grid-rows
+           (set on #body) so they fill the remaining vertical space. */
         .panel {
             border: round $surface-lighten-2;
             padding: 0 1;
-            height: 1fr;
+            height: auto;
             min-height: 6;
+        }
+        DataTable.panel {
+            height: 1fr;
         }
         .panel:focus-within {
             border: round $accent-lighten-1;
@@ -669,9 +676,14 @@ def _build_app_class():
                 _hr("total CPU%"), _hr("idle (max)"),
             )
             proj: DataTable = self.query_one("#projects", DataTable)
+            # LANGS column dropped — at half-grid width the table was
+            # overflowing and chopping LAUNCHER chips to 2 chars. The
+            # lang info is low-signal during live monitoring; users who
+            # need it can run `cool dev`. Folding launchers into the
+            # freed space restores readable chip rendering.
             proj.add_columns(
                 _h("project"), _hr("count"), _hr("total RSS"),
-                _h("langs"), _h("launchers"),
+                _h("launchers"),
             )
             ports: DataTable = self.query_one("#ports", DataTable)
             ports.add_columns(
@@ -872,7 +884,6 @@ def _build_app_class():
                     "[dim italic]no dev processes[/]",
                     "[dim]–[/]",
                     "[dim]–[/]",
-                    "[dim]–[/]",
                     "[dim italic]open a project with node / python / …[/]",
                 )
                 t.border_title = "Top Projects by RSS"
@@ -884,7 +895,6 @@ def _build_app_class():
                     name_cell,
                     Text(str(row.count), justify="right"),
                     Text(human_bytes(row.rss), justify="right"),
-                    _chip_tokens(row.langs),
                     _chip_tokens(row.launchers),
                 )
             total_rss = sum(r.rss for r in rows)

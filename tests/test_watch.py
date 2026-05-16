@@ -180,7 +180,10 @@ def test_render_subtitle_includes_all_bits():
     )
     assert "pressure" in sub
     assert "warn" in sub
-    assert "3s/15s" in sub
+    # Cadence (⟳ 3s/15s) was dropped from the healthbar — it's a static
+    # config value, not live data. dry-run mode still surfaces because
+    # it's a non-default operational state the user needs to see.
+    assert "3s/15s" not in sub
     assert "dry-run" in sub
 
 
@@ -216,10 +219,15 @@ def test_render_subtitle_embeds_host_and_battery_when_provided():
     assert "32GPU" in sub
     assert "8P+2E" in sub
     # Identity zone uses the shared ``human_bytes`` formatter so units
-    # stay consistent with the panel content (no more bespoke "64G/2.0T").
+    # stay consistent with the panel content (no more bespoke "64G").
     assert "64.0GB RAM" in sub
-    assert "2.0TB disk" in sub
     assert "macOS 15.2" in sub
+    # disk total + uptime were trimmed from identity to keep the bar
+    # under typical terminal widths — they used to push the clock and
+    # cadence off-screen. Pin their absence so the design intent
+    # doesn't regress later.
+    assert "disk" not in sub
+    assert "up " not in sub
     # Hot-battery indicator is colored red (>=40°C triggers bold red).
     assert "41.5" in sub
     assert "bold red" in sub

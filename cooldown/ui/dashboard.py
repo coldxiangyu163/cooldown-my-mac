@@ -446,11 +446,18 @@ def _memory_composition(mem: mem_mod.MemoryStats, *, width: int = 24) -> tuple[s
     total = mem.total or 1
     wired = mem.wired
     compressed = mem.compressed
-    # "Active" = the part of `used` that is neither wired nor
-    # compressed (apps, kernel structures). Clamp to 0 because macOS
-    # sometimes reports a few MB of slop between collectors.
-    active = max(0, mem.used - wired - compressed)
-    free = max(0, total - mem.used)
+    # On macOS, ``used`` and ``compressed`` are reported as overlapping
+    # categories — vm_stat counts compressed pages in a separate pool
+    # from active/wired, but psutil's ``used`` derives from
+    # ``total - available`` without subtracting compressed. So:
+    #   * active = used minus wired (the "regular in-use" pages)
+    #   * compressed is its own segment (not subtracted from active)
+    #   * free is whatever's left after all three
+    # Free is clamped so the four segments always sum to exactly total
+    # — losing a couple hundred MB of slop is fine; the visual is
+    # showing proportions, not exact bytes.
+    active = max(0, mem.used - wired)
+    free = max(0, total - wired - active - compressed)
     sizes = {"wired": wired, "compressed": compressed, "active": active, "free": free}
 
     raw = [sizes[name] / total * width for name, _ in _MEM_SEGMENTS]
@@ -497,9 +504,11 @@ def _mem_content(
     swap_color = _pct_color(swap_pct)
 
     bar_str, legend_str = _memory_composition(mem)
+    # The headline %% lives in the panel's border title (round 14)
+    # now — no need to repeat it in the body. Bar still encodes %
+    # visually; bytes + history sparkline tell the rest of the story.
     headline = (
         f"{bar_str}  "
-        f"[{color}]{used_pct:5.1f}%[/]  "
         f"[dim]{human_bytes(mem.used)} / {human_bytes(mem.total)}[/]"
     )
     if history:
@@ -507,6 +516,10 @@ def _mem_content(
         # panel so stress patterns read consistently across panels.
         headline += f"  {heatbar(history, hi=100.0, width=20)}"
 
+    # Pressure level intentionally NOT a body row — the panel's
+    # border title (mem_title_summary) already surfaces it as
+    # "Memory · ● 74.3% · critical" so duplicating it in the body
+    # was just two-times noise. Same fact, half the visual weight.
     rows: list[tuple[str, str]] = [
         ("Used", headline),
         # Legend sits on its own row with an empty label so it visually
@@ -520,7 +533,6 @@ def _mem_content(
             if mem.swap_total
             else "[dim]unused[/]",
         ),
-        ("Pressure", _pressure_badge(mem.pressure_level)),
     ]
     return _kv(rows)
 
