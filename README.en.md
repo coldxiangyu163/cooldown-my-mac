@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-  <b>A runtime thermal / workload CLI for heavy Mac users</b><br>
-  Reaps the AI CLIs (droid · codex · claude · cursor-agent ...) you leave running 24/7 — <em>before</em> they overheat your Mac.
+  <b>A cooldown CLI for the AI vibe-coding era</b><br>
+  You thought you were just chatting with AI. Your Mac is being roasted by 100+ runaway node processes.
 </p>
 
 <p align="center">
@@ -21,22 +21,26 @@
 
 ---
 
-## What's happening to your Mac?
+## Why is your Mac hot again?
 
-- Fans spinning all day, Activity Monitor can't tell you who's eating CPU
-- Memory pressure red, but you don't know which forgotten `next dev` is holding 4 GB
-- 5 AI CLIs each spawned their own copy of MCP tools — 100+ node processes total
-- After a reboot, a pile of LaunchAgents / mysql / postgres comes back; nobody remembers why
+In the AI vibe-coding era, the culprit changed:
 
-`cool` is a macOS CLI that attributes every process across three axes — **project / AI CLI / launcher** — and gives you batch reaping, memory-pressure guarding, and a 24/7 launchd-managed daemon.
+- 🥵 **"I was just chatting with Claude / Cursor"** — and the fans have been on full blast all day. Usually it's the MCP server that didn't exit when the session did.
+- 🧠 **Memory pressure red, Activity Monitor is wall-to-wall `node`** — 5 AI CLIs each spawn their own copy of chrome-devtools-mcp / sequential-thinking / filesystem MCP. 100+ node procs, 4 GB+ gone.
+- 👻 **You quit Cursor / Codex / Droid, but CPU is still pegged** — child processes didn't follow the parent down. The orphans were adopted by launchd and forgotten forever.
+- 🌳 **That `next dev` / `vite` the AI spun up months ago is still running** — you've long forgotten about it. It hasn't forgotten about your RAM.
+- 🚀 **Every reboot brings back another wave of LaunchAgents** — Cursor / Claude Desktop / Codex / Raycast / messaging apps all want to live in the tray.
 
-It does **not replace** [Mole](https://github.com/tw93/Mole) (disk) / [mactop](https://github.com/context-labs/mactop) (hardware readings) / [stats](https://github.com/exelban/stats) (menu bar) — it fills the gap they leave: your dev workload.
+`cool` is a macOS CLI built for AI vibe coders: it attributes every process across three axes — **project / AI CLI / launcher** — so you know which of those 100 node procs belong to what, and can reap them by family. Comes with memory-pressure guarding, a 24/7 launchd-managed daemon, and a JSONL audit log.
+
+It does **not replace** [Mole](https://github.com/tw93/Mole) (disk cleanup) / [mactop](https://github.com/context-labs/mactop) (hardware readings) / [stats](https://github.com/exelban/stats) (menu bar). It fills the gap they leave in the AI era: **the runaway dev processes that your AI agents leave behind.**
 
 ## Highlights
 
-**Process attribution & identity**
+**AI CLI family awareness** *(built for vibe coding)*
+- Built-in recognition for droid · codex · claude · opencode · cursor-agent · aider · hermes · cmux · gemini-cli ... aggregated for display, reaped per family
+- Auto-detects MCP servers (chrome-devtools-mcp / sequential-thinking / filesystem / any npx package) so they don't pollute your real project stats
 - Every dev process tagged with `project root + launcher + lang/framework`; a 7-level fallback chain guarantees coverage (`cwd unknown` never shows up)
-- AI CLI family awareness: droid · codex · claude · opencode · cursor-agent · aider · hermes ... aggregated for display, reaped per family
 
 **Hardware awareness**
 - Battery: `ioreg` for cell temp / cycles / health
@@ -57,9 +61,9 @@ It does **not replace** [Mole](https://github.com/tw93/Mole) (disk) / [mactop](h
 **Script-friendly**
 - `status / procs / dev / ports / thermal` all support `--json` for `jq` pipelines
 
-## Sample output
+## Here's the culprit
 
-Real `cool dev` output on a Mac with a few AI CLIs running:
+Real `cool dev` output on a Mac with a few AI CLIs left running — you'll realise you have no idea where most of these came from:
 
 ```text
 PROJECT                                 #      RSS  LANGS     LAUNCHERS
@@ -72,7 +76,7 @@ search-boss                            31    1.5GB  node      cmux,codex,launchd
 music-train-ios                        14    679MB  node      codex,launchd
 ```
 
-At a glance: three AI CLIs (claude / codex / droid) each spawned chrome-devtools-mcp, totalling 102 node procs and 4.1 GB; the real project `search-boss` is held simultaneously by cmux + codex + launchd + vscode. Which slice to cull, which to keep — immediately obvious.
+**Translation**: claude / codex / droid each spawned their own chrome-devtools-mcp — 102 node procs, 4.1 GB total. *This* is why your Mac sounds like a jet engine when you're "just chatting with AI." The real project `search-boss` is held simultaneously by cmux + codex + launchd + vscode, meaning at least three AI sessions have touched it. Pick a slice, reap the family in one keystroke.
 
 ## Install
 
@@ -102,15 +106,15 @@ By use case:
 
 | You want to... | Run |
 |---|---|
-| Pop up the interactive menu (Mole-style) | `cool` |
-| See overall Mac health | `cool status` |
+| Don't know where to start — pop the interactive menu | `cool` |
+| See overall Mac health (CPU / mem / temp / AI CLI count) | `cool status` |
 | Open the full-screen live dashboard | `cool watch` |
-| Find the heaviest AI CLI sessions | `cool procs` |
-| Reap every AI CLI idle ≥ 30 min | `cool reap` |
-| See which project each dev proc belongs to | `cool dev` |
-| Find out who owns port 5432 | `cool ports 5432` |
-| Auto-reap on memory pressure | `cool pressure --watch --auto-reap --auto-purge --yes` |
-| 24/7 background guardian | `cool daemon install` |
+| Find which AI CLI session is hogging the most | `cool procs` |
+| Reap every AI CLI idle ≥ 30 min (incl. their MCP children) | `cool reap` |
+| See which project each dev proc belongs to — and which AI spawned it | `cool dev` |
+| Figure out which port Cursor / Claude is holding | `cool ports 5432` |
+| Auto-reap + purge when memory pressure spikes | `cool pressure --watch --auto-reap --auto-purge --yes` |
+| 24/7 background guardian (for when you forget to quit AI) | `cool daemon install` |
 | Pipe machine-readable output | `cool status --json \| jq` |
 
 ## Commands
@@ -264,7 +268,10 @@ Highlights lists the four headline safety guarantees. The extras worth knowing:
 ## FAQ
 
 **Q: Will it kill a session I'm actively using?**  
-A: No. `reap` only touches processes with `idle_seconds >= 1800` (30 min of tty inactivity). The self-protection chain excludes cool itself and all its ancestors. Run `--dry-run` if you're not sure.
+A: No. `reap` only touches processes with `idle_seconds >= 1800` (30 min of tty inactivity); your live Claude / Codex / Cursor session won't be touched. The self-protection chain also excludes cool itself and all its ancestors. Run `--dry-run` first if you want a list before the kill.
+
+**Q: Why are there still node procs running after I quit Claude / Cursor?**  
+A: It's a common side effect of the MCP architecture — each AI CLI spawns MCP servers over stdio, and many servers don't implement graceful shutdown, so the children get reparented to launchd as orphans when the parent dies. `cool dev --stale` and `cool reap` exist precisely for this case.
 
 **Q: `sudo purge` — any side effects?**  
 A: `purge` is a first-party macOS command that drops the inactive filesystem cache. The only "side effect" is a few seconds of slightly slower disk reads until the cache repopulates.

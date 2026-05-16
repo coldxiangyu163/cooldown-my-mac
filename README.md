@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-  <b>给重度 Mac 用户的运行时散热 / 负载 CLI</b><br>
-  把 24h 挂着的 AI CLI 群（droid · codex · claude · cursor-agent ...）在烤热 Mac 之前清掉。
+  <b>AI vibe coding 时代的 Mac 退烧 CLI</b><br>
+  你以为只是和 AI 聊几句天，你的 Mac 已经被 100+ 个失控的 node 进程烤穿了。
 </p>
 
 <p align="center">
@@ -21,22 +21,26 @@
 
 ---
 
-## 你的 Mac 最近怎么了？
+## 你的 Mac 怎么又卡了？
 
-- 风扇响一整天，Activity Monitor 看不出谁在吃 CPU
-- 内存压力告警，但不知道哪个忘关的 `next dev` 在吃 4 GB
-- 5 个 AI CLI 各启动了一份 MCP 工具，加起来 100+ 个 node 进程
-- 重启后又一堆 LaunchAgent / mysql / postgres 自动起来，没人记得为什么
+AI vibe coding 时代，Mac 卡顿的元凶变了：
 
-`cool` 是一个 macOS CLI，把每个进程归到「**项目 / AI CLI / 启动器**」三个维度，并提供批量回收、内存压力守护、24/7 launchd 托管。
+- 🥵 **明明只是开着 Claude / Cursor 聊天，风扇却响一整天** —— 多半是某个 AI 会话退出后，MCP server 没跟着退
+- 🧠 **内存压力告警，Activity Monitor 翻开全是 `node`** —— 5 个 AI CLI 各启动一套 chrome-devtools-mcp / sequential-thinking / filesystem MCP，加起来 100+ 个 node 进程吃 4 GB+
+- 👻 **退出 Cursor / Codex / Droid 后 CPU 还在飙** —— 子进程没跟着死，孤儿挂在 launchd 下被永远遗忘
+- 🌳 **几个月前 AI 帮你跑起来的 `next dev` / `vite` 还在后台跑** —— 你早就忘了它的存在，它没忘记吃你内存
+- 🚀 **重启后又一堆 LaunchAgent 自动起来** —— Cursor / Claude Desktop / Codex / Raycast / 各种 IM 全要常驻
 
-它**不替代** [Mole](https://github.com/tw93/Mole)（磁盘）/ [mactop](https://github.com/context-labs/mactop)（硬件读数）/ [stats](https://github.com/exelban/stats)（菜单栏）—— 它补上这些工具不管的那块：你的开发工作负载。
+`cool` 是一个为 AI vibe coder 写的 macOS CLI：把每个进程归到「**项目 / AI CLI / 启动器**」三个维度，告诉你那 100 个 node 到底是谁的、在干什么、能不能整族 reap。配套内存压力守护、24/7 launchd 托管、JSONL 全量审计。
+
+它**不替代** [Mole](https://github.com/tw93/Mole)（磁盘清理）/ [mactop](https://github.com/context-labs/mactop)（硬件读数）/ [stats](https://github.com/exelban/stats)（菜单栏）—— 它补上 AI 时代它们不管的那块：**被 AI agent 拉起的失控 dev 进程群**。
 
 ## 核心能力
 
-**进程归因 & 识别**
+**AI CLI 家族感知** *(为 vibe coding 而生)*
+- 内置识别 droid · codex · claude · opencode · cursor-agent · aider · hermes · cmux · gemini-cli ... 聚合显示，整族 reap
+- 自动识别 MCP server（chrome-devtools-mcp / sequential-thinking / filesystem / 任意 npx 包），不会污染你真正项目的统计
 - 每个 dev 进程归到「项目根 + 启动器 + 语言/框架」，7 级 fallback 链兜底（永远不会出现 `cwd unknown`）
-- AI CLI 家族识别：droid · codex · claude · opencode · cursor-agent · aider · hermes ... 聚合显示，整族 reap
 
 **硬件感知**
 - 电池：ioreg 解析电芯温度 / 循环 / 健康
@@ -57,9 +61,9 @@
 **脚本友好**
 - `status / procs / dev / ports / thermal` 全部支持 `--json`，可接 `jq` 流水线
 
-## 示例输出
+## 凶手长这样
 
-一台日常挂着几个 AI CLI 的 Mac 上 `cool dev` 的真实输出：
+一台日常挂着几个 AI CLI 的 Mac 上 `cool dev` 的真实输出——你会发现自己根本不知道这些进程从哪来：
 
 ```text
 PROJECT                                 #      RSS  LANGS     LAUNCHERS
@@ -72,7 +76,7 @@ search-boss                            31    1.5GB  node      cmux,codex,launchd
 music-train-ios                        14    679MB  node      codex,launchd
 ```
 
-一眼能看出：3 个 AI CLI（claude / codex / droid）各自启动了 chrome-devtools-mcp，加起来 102 个 node 进程吃 4.1GB；`search-boss` 这个真实项目被 cmux / codex / launchd / vscode 4 个不同 launcher 共同持有。要清理哪一块、留下哪一块，一目了然。
+**翻译一下**：claude / codex / droid 三个 AI CLI 各自启动了一份 chrome-devtools-mcp，加起来 102 个 node 进程吃 4.1 GB——这就是为什么你 Mac 在你"只是和 AI 聊天"的时候风扇起飞。`search-boss` 被 cmux / codex / launchd / vscode 4 个 launcher 同时持有，说明它至少被三个 AI 会话改过。一键就能选择整族 reap。
 
 ## 安装
 
@@ -102,16 +106,16 @@ echo "alias cool='$(pwd)/.venv/bin/cool'" >> ~/.zshrc && source ~/.zshrc
 
 | 你想... | 跑 |
 |---|---|
-| 弹出交互式菜单（Mole 风格） | `cool` |
-| 看 Mac 整体健康 | `cool status` |
+| 不知从何下手——弹出交互式菜单 | `cool` |
+| 看 Mac 整体健康（CPU / 内存 / 温度 / AI CLI 数量） | `cool status` |
 | 打开全屏实时仪表盘 | `cool watch` |
-| 找出最吃资源的 AI CLI 会话 | `cool procs` |
-| 一次清掉所有闲置 30 分钟以上的 AI CLI | `cool reap` |
-| 看每个 dev 进程属于哪个项目 / 哪个 launcher 拉起 | `cool dev` |
-| 查谁占着 5432 端口 | `cool ports 5432` |
-| 内存压力高时自动清理 | `cool pressure --watch --auto-reap --auto-purge --yes` |
-| 24/7 后台守护 | `cool daemon install` |
-| 输出 JSON 喂给脚本 | `cool status --json \| jq` |
+| 看哪个 AI CLI 会话最吃资源 | `cool procs` |
+| 一次清掉所有闲置 30 分钟以上的 AI CLI（含 MCP 子进程） | `cool reap` |
+| 看每个 dev 进程到底是哪个项目 / 哪个 AI 拉起来的 | `cool dev` |
+| 查 Cursor / Claude 把哪个端口占了 | `cool ports 5432` |
+| 内存压力高时自动 reap + purge | `cool pressure --watch --auto-reap --auto-purge --yes` |
+| 24/7 后台守护（AI 退出忘关也不怕） | `cool daemon install` |
+| 输出 JSON 接 jq / 脚本 | `cool status --json \| jq` |
 
 ## 命令一览
 
@@ -261,7 +265,10 @@ rules:
 ## 常见问答
 
 **Q: 会不会杀掉我正在用的 AI CLI 会话？**  
-A: 不会。`reap` 默认只动 `idle_seconds >= 1800`（30 分钟无 tty 活动）的进程。自保护链会排除 cool 自身及其所有祖先。不放心先跑 `--dry-run`。
+A: 不会。`reap` 默认只动 `idle_seconds >= 1800`（30 分钟无 tty 活动）的进程；你当前在交互的 Claude / Codex / Cursor 会话不会被碰。自保护链会排除 cool 自身及所有祖先。不放心先跑 `--dry-run` 看清单。
+
+**Q: 为什么我退出 Claude / Cursor 后还有一堆 node 在跑？**  
+A: 这是 MCP 架构的常见副作用——每个 AI CLI 通过 stdio 拉起独立的 MCP server 子进程，而很多 server 没实现优雅关闭，主进程退出后子进程被 launchd 收养成孤儿。`cool dev --stale` 和 `cool reap` 就是专门给这种场景写的。
 
 **Q: 为什么要 `sudo purge`？会不会有副作用？**  
 A: `purge` 是 macOS 自带命令，清理文件系统的非活跃缓存。唯一"副作用"是接下来几秒文件系统响应慢一点（因为缓存刚清空）。
