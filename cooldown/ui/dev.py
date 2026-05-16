@@ -20,6 +20,25 @@ from ..collectors.dev import DevProc
 from ..collectors.procs import ProcInfo
 from ..safety.confirm import confirm
 from ..util import human_bytes, human_duration
+from .dashboard import KIND_COLORS
+
+
+def _launcher_cell(dev: DevProc) -> str:
+    """Render the launcher column.
+
+    System-level launchers (vscode / iterm / launchd / finder / ...) stay
+    in the column's default dim styling so they don't compete for visual
+    weight. AI-CLI / multiplexer launchers (claude / codex / droid / tmux
+    / cmux / ...) take their brand colour from the shared palette so the
+    eye can immediately spot "this node process was spawned by claude"
+    vs "by VS Code".
+    """
+    kind = dev.launcher.kind
+    label = dev.launcher.label
+    color = KIND_COLORS.get(kind)
+    if color is None:
+        return label
+    return f"[{color}]{label}[/]"
 
 _GROUP_DIMS = {"project", "lang", "launcher", "framework"}
 
@@ -104,7 +123,7 @@ def _build_table(devs: list[DevProc], by: str) -> Table:
                     human_bytes(d.rss),
                     f"{d.cpu_percent:.1f}",
                     idle_txt,
-                    d.launcher.label,
+                    _launcher_cell(d),
                     cmd,
                 )
             elif by == "lang":
@@ -114,7 +133,7 @@ def _build_table(devs: list[DevProc], by: str) -> Table:
                     human_bytes(d.rss),
                     f"{d.cpu_percent:.1f}",
                     proj_name,
-                    d.launcher.label,
+                    _launcher_cell(d),
                     cmd,
                 )
             elif by == "launcher":

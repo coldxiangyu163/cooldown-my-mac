@@ -9,6 +9,7 @@ from ..actions.reap import terminate
 from ..collectors import procs as procs_mod
 from ..safety.confirm import confirm
 from ..util import human_bytes, human_duration
+from .dashboard import kind_color
 
 DEFAULT_AI_IDLE = 1800  # 30 min
 DEFAULT_MUX_IDLE = 14400  # 4 h
@@ -58,7 +59,9 @@ def run(
         box=SIMPLE,
         caption="thresholds: ai=" + human_duration(ai_idle) + " mux=" + human_duration(mux_idle),
     )
-    table.add_column("kind", style="bold yellow")
+    # Use the shared kind palette (`cool watch` / `cool status` /
+    # `cool procs`) instead of a flat yellow column.
+    table.add_column("kind")
     table.add_column("pid", justify="right")
     table.add_column("rss", justify="right")
     table.add_column("cpu%", justify="right")
@@ -67,8 +70,9 @@ def run(
     total_rss = 0
     for p in targets:
         total_rss += p.rss
+        color = kind_color(p.kind)
         table.add_row(
-            p.kind,
+            f"[{color}]●[/] [{color}]{p.kind}[/]",
             str(p.pid),
             human_bytes(p.rss),
             f"{p.cpu_percent:.1f}",

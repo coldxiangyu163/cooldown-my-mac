@@ -13,6 +13,7 @@ from ..actions.reap import terminate
 from ..collectors import procs as procs_mod
 from ..safety.confirm import confirm
 from ..util import human_bytes, human_duration
+from .dashboard import kind_color
 
 
 def _print_table(console: Console, procs: list[procs_mod.ProcInfo]) -> None:
@@ -20,7 +21,10 @@ def _print_table(console: Console, procs: list[procs_mod.ProcInfo]) -> None:
         console.print("[dim]no AI CLI / multiplexer processes detected.[/]")
         return
     table = Table(title="AI CLI inventory", box=SIMPLE, show_lines=False)
-    table.add_column("kind", style="bold yellow")
+    # The "kind" column carries its own per-row colour (via kind_color)
+    # so the same brand palette `cool watch` and `cool status` use also
+    # applies here — no column-level style override.
+    table.add_column("kind")
     table.add_column("pid", justify="right", style="cyan")
     table.add_column("ppid", justify="right", style="dim")
     table.add_column("rss", justify="right")
@@ -32,10 +36,11 @@ def _print_table(console: Console, procs: list[procs_mod.ProcInfo]) -> None:
 
     groups = procs_mod.group_by_kind(procs)
     for kind, items in groups.items():
+        color = kind_color(kind)
         for p in items:
             idle_txt = human_duration(p.idle_seconds) if p.idle_seconds is not None else "-"
             table.add_row(
-                kind,
+                f"[{color}]●[/] [{color}]{kind}[/]",
                 str(p.pid),
                 str(p.ppid),
                 human_bytes(p.rss),
