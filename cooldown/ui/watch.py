@@ -2,22 +2,28 @@
 
 Layout
 ------
-A 3-row × 2-col grid of panels::
+A 4-row × 2-col grid plus a dense single-line healthbar header. The
+bottom row (Listening Ports) spans both columns::
 
+    ┌─ healthbar: Health │ alerts │ context │ identity │ meta ─────┐
     +---------------+---------------+
-    |      CPU      |     Memory    |     (fast tick)
+    |      CPU      |     Memory    |     fast  · fast
     +---------------+---------------+
-    |    Thermal    |    AI CLI     |     (fast tick)
+    |    Thermal    |    Battery    |     fast  · fast
     +---------------+---------------+
-    | Top Projects  |   Top Ports   |     (slow tick)
+    |    AI CLI     | Top Projects  |     fast  · slow
     +---------------+---------------+
+    |       Listening Ports         |     slow
+    +-------------------------------+
+
+Per-cell tick mapping (a panel refreshes only when its tick fires):
 
 Timers
 ------
 Two independent refresh timers:
 
-* ``fast_interval`` (default 3s): CPU / Memory / Thermal / AI CLI
-* ``slow_interval`` (default 15s): Top Projects / Top Ports
+* ``fast_interval`` (default 3s): CPU / Memory / Thermal / Battery / AI CLI
+* ``slow_interval`` (default 15s): Top Projects / Listening Ports
 
 Each tick is dispatched to a Textual thread worker (one per group) so the
 UI event loop never blocks on ``psutil`` sampling or ``lsof`` shell-outs.
@@ -44,6 +50,7 @@ import contextlib
 import json
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -66,6 +73,12 @@ from .dashboard import (
     _health_score,
     _mem_content,
     _thermal_content,
+)
+from .dashboard import (
+    decorate_project_name as _decorate_project_name,
+)
+from .dashboard import (
+    kind_color as _kind_color,
 )
 
 log = logging.getLogger("cooldown.watch")
@@ -230,64 +243,92 @@ def render_subtitle(
     host: host_mod.HostInfo | None = None,
     battery: batt_mod.BatteryStats | None = None,
 ) -> str:
-    bits: list[str] = []
+    """Compose the dense header bar shown above the panel grid.
 
-    # 1. Health dot (lights up the eye first).
+    The bar is split into five visual zones separated by a heavier
+    ``│`` divider so the eye can chunk:
+
+        ┃ Health ┃ Live alerts ┃ Context ┃ Identity ┃ Meta ┃
+
+    Inside each zone elements are joined with the lighter ``·`` so the
+    hierarchy is divider > separator > value. Static identity info is
+    dimmed; only escalated alerts (pressure/thermal/battery) gain bold
+    + colour, which keeps the bar visually quiet most of the time and
+    makes a single bright spike easy to notice.
+    """
+    zones: list[str] = []
+
+    # Zone 1 — Health anchor. Always the leftmost element so the eye
+    # has a stable landing point; the dot+number is iconic enough that
+    # the "Health" label can sit dimmed to the right.
     if mem and sys_stats and therm:
-        score, color = _health_score(mem, sys_stats, therm)
-        bits.append(f"Health [{color}]●{score}[/]")
+        score, color = _health_score(mem, sys_stats, therm, battery)
+        zones.append(f"[bold {color}]● {score}[/] [dim]Health[/]")
 
-    # 2. Machine identity: model · chip · topology · RAM/Disk · macOS.
-    if host is not None:
-        chip = host.chip.replace("Apple ", "")
-        gpu = f", {host.gpu_cores}GPU" if host.gpu_cores else ""
-        ram_gb = host.ram_bytes / 1024 / 1024 / 1024
-        disk_tb = host.disk_total_bytes / 1024 ** 4
-        bits.append(
-            f"[cyan]{host.model}[/] · [yellow]{chip}{gpu}[/] [dim]{host.topology}[/] "
-            f"· {ram_gb:.0f}G/{disk_tb:.1f}T · macOS {host.macos_version}"
-        )
-
-    # 3. Uptime.
-    if sys_stats:
-        bits.append(f"up [dim]{human_duration(sys_stats.uptime)}[/]")
-
-    # 4. Battery temp (not AC state — temp is the thermal-management signal).
-    if battery and battery.temp_c is not None:
-        t = battery.temp_c
-        tc = "bold red" if t >= 40 else "yellow" if t >= 35 else "green"
-        tail = ""
-        if battery.percent is not None:
-            tail = f" [dim]{battery.percent:.0f}%[/]"
-            if battery.charging:
-                tail += " [dim green]⚡[/]"
-        bits.append(f"batt [{tc}]{t:.1f}°C[/]{tail}")
-
-    # 5. Memory pressure (explicit label so it's scannable).
+    # Zone 2 — Live alerts (pressure · thermal · battery temp). Each
+    # element scales weight with severity so the bar stays calm at idle.
+    alerts: list[str] = []
     if mem:
         lvl = mem.pressure_level or "?"
-        lvl_color = {
-            "normal": "green", "warn": "yellow", "critical": "bold red"
-        }.get(lvl, "dim")
-        bits.append(f"pressure [{lvl_color}]{lvl}[/]")
+        if lvl == "critical":
+            alerts.append("[bold red]pressure critical[/]")
+        elif lvl == "warn":
+            alerts.append("[yellow]pressure warn[/]")
+        else:
+            alerts.append(f"[dim]pressure {lvl}[/]")
+    if therm and therm.thermal_warning and therm.thermal_warning != "none":
+        alerts.append(f"[bold red]thermal {therm.thermal_warning}[/]")
+    if therm and therm.sleep_prevented:
+        alerts.append("[yellow]sleep blocked[/]")
+    if battery and battery.temp_c is not None:
+        t = battery.temp_c
+        # bold-red is the already-strong rendering for >=40°C — adding
+        # a second "bold " prefix would emit "bold bold red" which Rich
+        # treats as a no-op but reads as a bug in the markup.
+        tc = "bold red" if t >= 40 else "yellow" if t >= 35 else "green"
+        alerts.append(f"[{tc}]batt {t:.1f}°C[/]")
+    if alerts:
+        zones.append(" · ".join(alerts))
 
-    # 6. AI CLI fleet size.
+    # Zone 3 — Context (AI CLI count + last action).
+    ctx: list[str] = []
     if procs is not None:
-        bits.append(f"CLIs [cyan]{len(procs)}[/]")
-
-    # 7. Last operation echo (dims older entries).
+        ctx.append(f"CLIs [cyan]{len(procs)}[/]")
     if last_op:
         action, ts = last_op
         ago = max(0, time.time() - ts)
-        bits.append(f"last [dim]{action}[/] [dim]{human_duration(ago)} ago[/]")
+        ctx.append(f"last [dim]{action} {human_duration(ago)} ago[/]")
+    if ctx:
+        zones.append(" · ".join(ctx))
 
-    # 8. Tick cadence + state flags.
-    bits.append(f"[dim]⟳ {fast_interval}s/{slow_interval}s[/]")
+    # Zone 4 — Identity (dim throughout — static info doesn't compete).
+    if host is not None:
+        chip = host.chip.replace("Apple ", "")
+        gpu = f", {host.gpu_cores}GPU" if host.gpu_cores else ""
+        ident = (
+            f"{host.model} · {chip}{gpu} {host.topology} · "
+            f"{human_bytes(host.ram_bytes)} RAM · "
+            f"{human_bytes(host.disk_total_bytes)} disk · "
+            f"macOS {host.macos_version}"
+        )
+        if sys_stats:
+            ident += f" · up {human_duration(sys_stats.uptime)}"
+        zones.append(f"[dim]{ident}[/]")
+
+    # Zone 5 — Meta (tick cadence + mode flags). Flags get colour even
+    # though zone is dim-by-default so paused/dry-run modes are obvious.
+    meta = [f"⟳ {fast_interval}s/{slow_interval}s"]
+    flags: list[str] = []
     if paused:
-        bits.append("[yellow]paused[/]")
+        flags.append("[yellow]paused[/]")
     if dry_run:
-        bits.append("[magenta]dry-run[/]")
-    return "  ·  ".join(bits)
+        flags.append("[magenta]dry-run[/]")
+    meta_str = f"[dim]{' · '.join(meta)}[/]"
+    if flags:
+        meta_str = f"{meta_str} · {' · '.join(flags)}"
+    zones.append(meta_str)
+
+    return "  [dim]│[/]  ".join(z for z in zones if z)
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +419,7 @@ def _attribute_ports(pids: set[int]) -> tuple[dict[int, str], dict[int, str]]:
 
 def _build_app_class():
     from textual.app import App
+    from textual.binding import Binding
     from textual.containers import Grid
     from textual.widgets import DataTable, Footer, Header, Static
 
@@ -413,14 +455,34 @@ def _build_app_class():
             height: 1fr;
             min-height: 6;
         }
+        /* Unfocused interactive panels get a rounded accent border so
+           the user knows they're tab-targetable, but no fill: keeps
+           the four CPU/Mem/Thermal/Battery info panels visually quiet
+           by comparison. */
         DataTable.panel {
             border: round $accent;
         }
         DataTable.panel > .datatable--cursor {
             background: $accent 40%;
         }
+        DataTable.panel:hover {
+            border: round $accent-lighten-1;
+        }
+        /* Focused panel is the most visually prominent thing on screen.
+           Heavy border + a soft accent tint + bolder cursor row so the
+           user never loses track of where Tab landed. Matches the
+           lazygit/k9s feedback you get on panel focus. */
         DataTable:focus.panel {
-            border: thick $accent;
+            border: heavy $accent;
+            background: $accent 8%;
+        }
+        DataTable:focus.panel > .datatable--cursor {
+            background: $accent 65%;
+            text-style: bold;
+        }
+        DataTable:focus.panel > .datatable--header {
+            text-style: bold;
+            color: $accent-lighten-2;
         }
 
         /* Ports gets the full bottom row — wide tables read much better
@@ -430,21 +492,27 @@ def _build_app_class():
         }
         """
 
+        # Footer is intentionally lean — only the 6 keys a user actually
+        # reaches for during a normal session show in the help bar. The
+        # rest (force-kill, panel focus shortcuts, tick-rate tuning) stay
+        # bound but hidden so power users discover them via docs/README
+        # rather than visual clutter.
         BINDINGS = [
-            ("q", "quit", "Quit"),
-            ("r", "refresh_fast", "Refresh"),
-            ("R", "refresh_slow", "Refresh slow"),
-            ("p", "toggle_pause", "Pause"),
-            ("d", "toggle_dry_run", "Dry-run"),
-            ("k", "kill_selected", "Kill"),
-            ("K", "kill_selected_force", "Force kill"),
-            ("1", "focus_ai", "AI table"),
-            ("2", "focus_projects", "Projects"),
-            ("3", "focus_ports", "Ports"),
-            ("plus,equals_sign", "faster_fast", "Faster"),
-            ("minus,underscore", "slower_fast", "Slower"),
-            ("bracket_left", "faster_slow", "Slow+"),
-            ("bracket_right", "slower_slow", "Slow-"),
+            Binding("q", "quit", "Quit"),
+            Binding("r", "refresh_fast", "Refresh"),
+            Binding("p", "toggle_pause", "Pause"),
+            Binding("d", "toggle_dry_run", "Dry-run"),
+            Binding("k", "kill_selected", "Kill"),
+            Binding("?", "show_help", "Help"),
+            Binding("R", "refresh_slow", "Refresh slow", show=False),
+            Binding("K", "kill_selected_force", "Force kill", show=False),
+            Binding("1", "focus_ai", "AI table", show=False),
+            Binding("2", "focus_projects", "Projects", show=False),
+            Binding("3", "focus_ports", "Ports", show=False),
+            Binding("plus,equals_sign", "faster_fast", "Faster", show=False),
+            Binding("minus,underscore", "slower_fast", "Slower", show=False),
+            Binding("bracket_left", "faster_slow", "Slow+", show=False),
+            Binding("bracket_right", "slower_slow", "Slow-", show=False),
         ]
 
         def __init__(self, *, fast_interval: int = 3, slow_interval: int = 15) -> None:
@@ -467,6 +535,10 @@ def _build_app_class():
             self._port_rows: list[PortRow] = []
             # Per-panel "last updated" epoch.
             self._updated: dict[str, float] = {}
+            # Rolling trend buffers for the CPU / Memory sparklines (last
+            # ~30 fast ticks ≈ 1.5 minutes at the default 3 s cadence).
+            self._cpu_hist: deque[float] = deque(maxlen=30)
+            self._mem_hist: deque[float] = deque(maxlen=30)
 
         # ---------------------------------------------------------- compose
         def compose(self):
@@ -481,11 +553,15 @@ def _build_app_class():
             batt = Static("[dim]sampling…[/]", id="battery", classes="panel")
             batt.border_title = "Battery"
             ai = DataTable(id="ai", classes="panel", cursor_type="row", zebra_stripes=True)
-            ai.border_title = "AI CLI Inventory  [dim](focus + k = reap)[/]"
+            # Boot-time titles match the post-tick titles: all three
+            # tables advertise the "focus + k = kill" hint so the
+            # discoverability isn't gated on the first slow tick
+            # completing.
+            ai.border_title = "AI CLI Inventory  [dim](focus + k = kill)[/]"
             proj = DataTable(id="projects", classes="panel", cursor_type="row", zebra_stripes=True)
-            proj.border_title = "Top Projects by RSS"
+            proj.border_title = "Top Projects by RSS  [dim](focus + k = kill)[/]"
             ports = DataTable(id="ports", classes="panel", cursor_type="row", zebra_stripes=True)
-            ports.border_title = "Listening Ports"
+            ports.border_title = "Listening Ports  [dim](focus + k = kill)[/]"
             yield Grid(cpu, mem, therm, batt, ai, proj, ports, id="body")
             yield Footer()
 
@@ -493,9 +569,12 @@ def _build_app_class():
         def on_mount(self) -> None:
             # Configure the DataTables once.
             ai: DataTable = self.query_one("#ai", DataTable)
-            ai.add_columns("kind", "count", "rss", "cpu%", "idle(max)")
+            # Column names mirror `cool status` so the two views share
+            # vocabulary: "total RSS" / "total CPU%" make it explicit
+            # these are sums across the group, not per-process values.
+            ai.add_columns("kind", "count", "total RSS", "total CPU%", "idle (max)")
             proj: DataTable = self.query_one("#projects", DataTable)
-            proj.add_columns("project", "#", "rss", "langs", "launchers")
+            proj.add_columns("project", "count", "total RSS", "langs", "launchers")
             ports: DataTable = self.query_one("#ports", DataTable)
             ports.add_columns("port", "proto", "pid", "process", "project", "launcher")
 
@@ -595,13 +674,19 @@ def _build_app_class():
         def _apply_cpu(self, sys_stats: sys_mod.SystemStats) -> None:
             self._sys = sys_stats
             self._updated["cpu"] = time.time()
-            self.query_one("#cpu", Static).update(_cpu_content(sys_stats))
+            self._cpu_hist.append(sys_stats.cpu_percent)
+            self.query_one("#cpu", Static).update(
+                _cpu_content(sys_stats, history=list(self._cpu_hist))
+            )
             self._refresh_subtitle()
 
         def _apply_mem(self, mem: mem_mod.MemoryStats) -> None:
             self._mem = mem
             self._updated["mem"] = time.time()
-            self.query_one("#mem", Static).update(_mem_content(mem))
+            self._mem_hist.append(mem.used_percent)
+            self.query_one("#mem", Static).update(
+                _mem_content(mem, history=list(self._mem_hist))
+            )
             self._refresh_subtitle()
 
         def _apply_thermal(self, therm: therm_mod.ThermalStats) -> None:
@@ -622,10 +707,24 @@ def _build_app_class():
             self._updated["ai"] = time.time()
             t: DataTable = self.query_one("#ai", DataTable)
             t.clear()
-            for row in rows:
-                style = "[yellow]" if row.kind in procs_mod.AI_KINDS else "[cyan]"
+            if not rows:
+                # Empty state: no claude/codex/droid/tmux processes right
+                # now. Show a single helper row so the table doesn't look
+                # broken on a freshly-rebooted Mac.
                 t.add_row(
-                    f"{style}{row.kind}[/]",
+                    "[dim italic]no sessions[/]",
+                    "[dim]–[/]",
+                    "[dim]–[/]",
+                    "[dim]–[/]",
+                    "[dim italic]launch claude / codex / droid …[/]",
+                )
+                t.border_title = "AI CLI Inventory  [dim](empty)[/]"
+                self._refresh_subtitle()
+                return
+            for row in rows:
+                color = _kind_color(row.kind)
+                t.add_row(
+                    f"[{color}]●[/] [{color}]{row.kind}[/]",
                     str(row.count),
                     human_bytes(row.rss),
                     f"{row.cpu:.1f}",
@@ -634,9 +733,14 @@ def _build_app_class():
             # Show aggregate stats in the title.
             total_rss = sum(r.rss for r in rows)
             total = sum(r.count for r in rows)
+            # Use "kill kind" (not "reap kind") so the action verb stays
+            # consistent across all three tables and doesn't promise the
+            # idle-aware semantics of the top-level ``cool reap`` command
+            # — pressing ``k`` here SIGTERMs every pid in the row right
+            # now, regardless of idle threshold.
             t.border_title = (
                 f"AI CLI Inventory · {total} procs · {human_bytes(total_rss)}  "
-                "[dim](k = reap kind)[/]"
+                "[dim](k = kill kind)[/]"
             )
             self._refresh_subtitle()
 
@@ -645,8 +749,18 @@ def _build_app_class():
             self._updated["projects"] = time.time()
             t: DataTable = self.query_one("#projects", DataTable)
             t.clear()
+            if not rows:
+                t.add_row(
+                    "[dim italic]no dev processes[/]",
+                    "[dim]–[/]",
+                    "[dim]–[/]",
+                    "[dim]–[/]",
+                    "[dim italic]open a project with node / python / …[/]",
+                )
+                t.border_title = "Top Projects by RSS  [dim](empty)[/]"
+                return
             for row in rows:
-                name_cell = f"[red]{row.name}[/]" if row.orphan else row.name
+                name_cell = _decorate_project_name(row.name, orphan=row.orphan)
                 t.add_row(
                     name_cell,
                     str(row.count),
@@ -657,7 +771,7 @@ def _build_app_class():
             total_rss = sum(r.rss for r in rows)
             t.border_title = (
                 f"Top Projects by RSS · {len(rows)} shown · "
-                f"{human_bytes(total_rss)}"
+                f"{human_bytes(total_rss)}  [dim](k = kill project)[/]"
             )
 
         def _apply_ports(self, rows: list[PortRow]) -> None:
@@ -665,6 +779,17 @@ def _build_app_class():
             self._updated["ports"] = time.time()
             t: DataTable = self.query_one("#ports", DataTable)
             t.clear()
+            if not rows:
+                t.add_row(
+                    "[dim italic]no listeners[/]",
+                    "[dim]–[/]",
+                    "[dim]–[/]",
+                    "[dim]–[/]",
+                    "[dim]–[/]",
+                    "[dim italic]nothing is listening on a TCP port[/]",
+                )
+                t.border_title = "Listening Ports  [dim](empty)[/]"
+                return
             for row in rows:
                 t.add_row(
                     str(row.port),
@@ -683,11 +808,20 @@ def _build_app_class():
                 )
 
         def _set_table_error(self, panel_id: str, exc: BaseException) -> None:
+            # Overwrite (rather than append to) the existing border_title:
+            # consecutive failed ticks were previously stacking
+            # "· error: X  · error: Y  · error: Z …" until a successful
+            # tick reset the title. Now the title resets every error.
+            base = {
+                "ai": "AI CLI Inventory",
+                "projects": "Top Projects by RSS",
+                "ports": "Listening Ports",
+            }.get(panel_id, panel_id)
             with contextlib.suppress(Exception):
                 t = self.query_one(f"#{panel_id}", DataTable)
                 t.clear()
                 t.border_title = (
-                    f"{t.border_title}  [red]· error: {type(exc).__name__}[/]"
+                    f"{base}  [bold red]✗ {type(exc).__name__}[/]"
                 )
 
         # ---------------------------------------------------------- healthbar
@@ -709,6 +843,18 @@ def _build_app_class():
                 self.query_one("#healthbar", Static).update(markup)
 
         # ---------------------------------------------------------- actions
+        def action_show_help(self) -> None:
+            """Pop a transient Toast listing every binding, so the lean
+            footer stays scannable without orphaning the advanced keys."""
+            lines = [
+                "[bold]Refresh[/]  r · R (slow)",
+                "[bold]Tables[/]   1 AI  ·  2 Projects  ·  3 Ports",
+                "[bold]Kill[/]     k SIGTERM  ·  K SIGKILL",
+                "[bold]Tick[/]     + / -  fast ±1s   ·   [ / ]  slow ±5s",
+                "[bold]Mode[/]     p Pause   ·   d Dry-run",
+            ]
+            self.notify("\n".join(lines), title="cool watch — keys", timeout=8.0)
+
         def action_refresh_fast(self) -> None:
             self._schedule_fast()
             self.notify("fast refresh queued", timeout=1.0)

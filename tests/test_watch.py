@@ -210,7 +210,10 @@ def test_render_subtitle_embeds_host_and_battery_when_provided():
     assert "M1 Max" in sub
     assert "32GPU" in sub
     assert "8P+2E" in sub
-    assert "64G/2.0T" in sub
+    # Identity zone uses the shared ``human_bytes`` formatter so units
+    # stay consistent with the panel content (no more bespoke "64G/2.0T").
+    assert "64.0GB RAM" in sub
+    assert "2.0TB disk" in sub
     assert "macOS 15.2" in sub
     # Hot-battery indicator is colored red (>=40°C triggers bold red).
     assert "41.5" in sub
@@ -259,6 +262,12 @@ async def test_watch_app_end_to_end_mount_and_apply(monkeypatch):
 
     # No oplog -> subtitle still renders cleanly.
     monkeypatch.setattr(watch, "_last_oplog_entry", lambda: None)
+    # Suppress the on_mount bootstrap workers so the test's explicit
+    # _apply_ports / _apply_projects synthetic data isn't overwritten by
+    # the real-machine port scan that the slow tick would otherwise run.
+    # The test exercises the apply path itself, not the bootstrap timer.
+    app._schedule_fast = lambda: None
+    app._schedule_slow = lambda: None
 
     async with app.run_test() as pilot:
         # Feed synthetic data via the public apply path.
