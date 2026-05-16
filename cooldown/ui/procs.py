@@ -1,6 +1,9 @@
 """`cool procs` — grouped AI CLI inventory + interactive multi-select kill."""
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
+
 import questionary
 from rich.box import SIMPLE
 from rich.console import Console
@@ -61,6 +64,7 @@ def run(
     force: bool = False,
     assume_yes: bool = False,
     kind_filter: list[str] | None = None,
+    json_out: bool = False,
 ) -> int:
     with console.status("[dim]scanning processes...[/]", spinner="dots"):
         procs = procs_mod.collect()
@@ -69,6 +73,10 @@ def run(
     if kind_filter:
         want = {k.lower() for k in kind_filter}
         procs = [p for p in procs if p.kind in want]
+
+    if json_out:
+        console.print_json(json.dumps([asdict(p) for p in procs], default=str))
+        return 0
 
     _print_table(console, procs)
     if not procs:

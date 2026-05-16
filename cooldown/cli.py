@@ -1,4 +1,10 @@
-"""Typer CLI entry point: `cool` / `cooldown`."""
+"""Typer CLI entry point: `cool` / `cooldown`.
+
+UI submodules are imported lazily inside each command body. ``cool
+--help`` and ``cool status`` should not pay the cost of importing every
+panel (Textual, questionary, Rich tables for ports/dev/launchd/...) just
+to reach one of them. The top-level surface here is intentionally tiny.
+"""
 from __future__ import annotations
 
 import sys
@@ -7,37 +13,6 @@ import typer
 from rich.console import Console
 
 from . import __version__
-from .ui import (
-    apps as apps_ui,
-)
-from .ui import (
-    daemon as daemon_ui,
-)
-from .ui import (
-    dashboard,
-    menu,
-    pressure,
-    procs,
-    reap,
-)
-from .ui import (
-    dev as dev_ui,
-)
-from .ui import (
-    launchd as launchd_ui,
-)
-from .ui import (
-    ports as ports_ui,
-)
-from .ui import (
-    services as services_ui,
-)
-from .ui import (
-    thermal as thermal_ui,
-)
-from .ui import (
-    watch as watch_ui,
-)
 
 app = typer.Typer(
     help="cooldown-my-mac · runtime thermal & workload manager",
@@ -68,7 +43,40 @@ def _root(
 ) -> None:
     if ctx.invoked_subcommand is not None:
         return
-    # Interactive menu when called bare.
+    # Interactive menu when called bare. Import UI modules lazily so that
+    # `cool --help` / `cool status` don't load every panel.
+    from .ui import (  # noqa: PLC0415
+        apps as apps_ui,
+    )
+    from .ui import (  # noqa: PLC0415
+        daemon as daemon_ui,
+    )
+    from .ui import (  # noqa: PLC0415
+        dashboard,
+        menu,
+        pressure,
+        procs,
+        reap,
+    )
+    from .ui import (  # noqa: PLC0415
+        dev as dev_ui,
+    )
+    from .ui import (  # noqa: PLC0415
+        launchd as launchd_ui,
+    )
+    from .ui import (  # noqa: PLC0415
+        ports as ports_ui,
+    )
+    from .ui import (  # noqa: PLC0415
+        services as services_ui,
+    )
+    from .ui import (  # noqa: PLC0415
+        thermal as thermal_ui,
+    )
+    from .ui import (  # noqa: PLC0415
+        watch as watch_ui,
+    )
+
     choice = menu.run(console)
     if choice in (None, "quit"):
         raise typer.Exit()
@@ -113,8 +121,17 @@ def _root(
 
 
 @app.command(help="One-shot system health dashboard.")
-def status() -> None:
-    dashboard.render(console)
+def status(
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit machine-readable JSON instead of the Rich dashboard."
+    ),
+) -> None:
+    from .ui import dashboard  # noqa: PLC0415
+
+    if json_out:
+        dashboard.render_json(console)
+    else:
+        dashboard.render(console)
 
 
 @app.command(name="procs", help="AI CLI inventory with interactive kill picker.")
@@ -133,24 +150,33 @@ def _procs_cmd(
             "tmux, cmux, zellij."
         ),
     ),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit machine-readable JSON (suppresses interactive flows)."
+    ),
 ) -> None:
+    from .ui import procs  # noqa: PLC0415
+
     code = procs.run(
         console,
         dry_run=dry_run,
         force=force,
         assume_yes=yes,
         kind_filter=kinds or None,
+        json_out=json_out,
     )
     raise typer.Exit(code)
 
 
 @app.command(name="reap", help="Reap idle AI CLI / multiplexer sessions.")
 def _reap_cmd(
+    # Defaults intentionally inlined here so this command can be reached
+    # via `cool reap --help` without importing the full reap UI module
+    # (and its rich.table / collectors dependencies).
     ai_idle: int = typer.Option(
-        reap.DEFAULT_AI_IDLE, "--ai-idle", help="Idle threshold (sec) for AI CLIs."
+        1800, "--ai-idle", help="Idle threshold (sec) for AI CLIs."
     ),
     mux_idle: int = typer.Option(
-        reap.DEFAULT_MUX_IDLE, "--mux-idle", help="Idle threshold (sec) for tmux/cmux/zellij."
+        14400, "--mux-idle", help="Idle threshold (sec) for tmux/cmux/zellij."
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview only, do not kill."),
     force: bool = typer.Option(False, "--force", "-9", help="Use SIGKILL instead of SIGTERM."),
@@ -159,6 +185,8 @@ def _reap_cmd(
         None, "--kind", "-k", help="Limit reap to specific kinds."
     ),
 ) -> None:
+    from .ui import reap  # noqa: PLC0415
+
     code = reap.run(
         console,
         ai_idle=ai_idle,
@@ -188,6 +216,8 @@ def _pressure_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview auto-reap/purge, don't run."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Assume yes to confirmations."),
 ) -> None:
+    from .ui import pressure  # noqa: PLC0415
+
     code = pressure.run(
         console,
         mode="watch" if watch else "once",
@@ -214,6 +244,8 @@ def _services_cmd(
     yes: bool = typer.Option(False, "--yes", "-y", help="Assume yes to confirmations."),
     only: list[str] = typer.Option(None, "--only", "-o", help="Filter by kind (mysql, postgres, redis, ...)."),
 ) -> None:
+    from .ui import services as services_ui  # noqa: PLC0415
+
     code = services_ui.run(console, dry_run=dry_run, assume_yes=yes, only=only or None)
     raise typer.Exit(code)
 
@@ -222,9 +254,15 @@ apps_app = typer.Typer(help="List / suspend / resume / quit heavy background app
 app.add_typer(apps_app, name="apps")
 
 
+def _load_apps_ui():
+    from .ui import apps as apps_ui  # noqa: PLC0415
+
+    return apps_ui
+
+
 @apps_app.command("list", help="List heavy background apps.")
 def _apps_list() -> None:
-    raise typer.Exit(apps_ui.run(console, action="list"))
+    raise typer.Exit(_load_apps_ui().run(console, action="list"))
 
 
 @apps_app.command("suspend", help="SIGSTOP a process tree (freezes CPU until resumed).")
@@ -234,7 +272,7 @@ def _apps_suspend(
     kinds: list[str] = typer.Option(None, "--kind", "-k"),
 ) -> None:
     raise typer.Exit(
-        apps_ui.run(console, action="suspend", dry_run=dry_run, assume_yes=yes, kinds=kinds or None)
+        _load_apps_ui().run(console, action="suspend", dry_run=dry_run, assume_yes=yes, kinds=kinds or None)
     )
 
 
@@ -245,7 +283,7 @@ def _apps_resume(
     kinds: list[str] = typer.Option(None, "--kind", "-k"),
 ) -> None:
     raise typer.Exit(
-        apps_ui.run(console, action="resume", dry_run=dry_run, assume_yes=yes, kinds=kinds or None)
+        _load_apps_ui().run(console, action="resume", dry_run=dry_run, assume_yes=yes, kinds=kinds or None)
     )
 
 
@@ -256,7 +294,7 @@ def _apps_quit(
     kinds: list[str] = typer.Option(None, "--kind", "-k"),
 ) -> None:
     raise typer.Exit(
-        apps_ui.run(console, action="quit", dry_run=dry_run, assume_yes=yes, kinds=kinds or None)
+        _load_apps_ui().run(console, action="quit", dry_run=dry_run, assume_yes=yes, kinds=kinds or None)
     )
 
 
@@ -265,9 +303,16 @@ def _thermal_cmd(
     restore: bool = typer.Option(False, "--restore", help="Restore safe sleep defaults (displaysleep/disksleep=10)."),
     dry_run: bool = typer.Option(False, "--dry-run"),
     yes: bool = typer.Option(False, "--yes", "-y"),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit machine-readable JSON (pmset + smc + sleep_policy)."
+    ),
 ) -> None:
+    from .ui import thermal as thermal_ui  # noqa: PLC0415
+
     raise typer.Exit(
-        thermal_ui.run(console, restore=restore, dry_run=dry_run, assume_yes=yes)
+        thermal_ui.run(
+            console, restore=restore, dry_run=dry_run, assume_yes=yes, json_out=json_out
+        )
     )
 
 
@@ -279,6 +324,8 @@ def _launchd_cmd(
     dry_run: bool = typer.Option(False, "--dry-run"),
     yes: bool = typer.Option(False, "--yes", "-y"),
 ) -> None:
+    from .ui import launchd as launchd_ui  # noqa: PLC0415
+
     raise typer.Exit(
         launchd_ui.run(
             console,
@@ -295,12 +342,18 @@ daemon_app = typer.Typer(help="Background launchd agent (rule engine).")
 app.add_typer(daemon_app, name="daemon")
 
 
+def _load_daemon_ui():
+    from .ui import daemon as daemon_ui  # noqa: PLC0415
+
+    return daemon_ui
+
+
 @daemon_app.command("install", help="Install launchd plist and start the agent.")
 def _daemon_install(
     dry_run: bool = typer.Option(False, "--dry-run"),
     yes: bool = typer.Option(False, "--yes", "-y"),
 ) -> None:
-    raise typer.Exit(daemon_ui.run(console, action="install", dry_run=dry_run, assume_yes=yes))
+    raise typer.Exit(_load_daemon_ui().run(console, action="install", dry_run=dry_run, assume_yes=yes))
 
 
 @daemon_app.command("uninstall", help="Stop and remove the launchd agent.")
@@ -308,31 +361,31 @@ def _daemon_uninstall(
     dry_run: bool = typer.Option(False, "--dry-run"),
     yes: bool = typer.Option(False, "--yes", "-y"),
 ) -> None:
-    raise typer.Exit(daemon_ui.run(console, action="uninstall", dry_run=dry_run, assume_yes=yes))
+    raise typer.Exit(_load_daemon_ui().run(console, action="uninstall", dry_run=dry_run, assume_yes=yes))
 
 
 @daemon_app.command("status", help="Show daemon PID + recent log tail.")
 def _daemon_status() -> None:
-    raise typer.Exit(daemon_ui.run(console, action="status"))
+    raise typer.Exit(_load_daemon_ui().run(console, action="status"))
 
 
 @daemon_app.command("logs", help="Tail the daemon log.")
 def _daemon_logs() -> None:
-    raise typer.Exit(daemon_ui.run(console, action="logs"))
+    raise typer.Exit(_load_daemon_ui().run(console, action="logs"))
 
 
 @daemon_app.command("config-init", help="Write ~/.config/cooldown/daemon.yaml with commented defaults.")
 def _daemon_config_init(
     force: bool = typer.Option(False, "--force", help="Overwrite existing config."),
 ) -> None:
-    raise typer.Exit(daemon_ui.run(console, action="config-init", force=force))
+    raise typer.Exit(_load_daemon_ui().run(console, action="config-init", force=force))
 
 
 @daemon_app.command("run", help="Run the rule engine in the foreground (used by launchd).")
 def _daemon_run(
     config: str = typer.Option(None, "--config", "-c", help="Alternate YAML path."),
 ) -> None:
-    raise typer.Exit(daemon_ui.run(console, action="run", config_path=config))
+    raise typer.Exit(_load_daemon_ui().run(console, action="run", config_path=config))
 
 
 @app.command(name="watch", help="Full-screen Textual live dashboard (requires `textual`).")
@@ -347,6 +400,8 @@ def _watch_cmd(
         help="Slow-tick interval (Top Projects/Top Ports) in seconds.",
     ),
 ) -> None:
+    from .ui import watch as watch_ui  # noqa: PLC0415
+
     raise typer.Exit(watch_ui.run(console, interval=interval, slow_interval=slow_interval))
 
 
@@ -372,7 +427,12 @@ def _dev_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview kills only."),
     force: bool = typer.Option(False, "--force", "-9", help="SIGKILL instead of SIGTERM."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Assume yes to confirmations."),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit machine-readable JSON (suppresses interactive flows)."
+    ),
 ) -> None:
+    from .ui import dev as dev_ui  # noqa: PLC0415
+
     raise typer.Exit(
         dev_ui.run(
             console,
@@ -385,6 +445,7 @@ def _dev_cmd(
             dry_run=dry_run,
             force=force,
             assume_yes=yes,
+            json_out=json_out,
         )
     )
 
@@ -406,7 +467,12 @@ def _ports_cmd(
     dry_run: bool = typer.Option(False, "--dry-run"),
     force: bool = typer.Option(False, "--force", "-9"),
     yes: bool = typer.Option(False, "--yes", "-y"),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit machine-readable JSON (suppresses interactive flows)."
+    ),
 ) -> None:
+    from .ui import ports as ports_ui  # noqa: PLC0415
+
     port = None
     range_ = None
     if query is not None:
@@ -427,6 +493,7 @@ def _ports_cmd(
             dry_run=dry_run,
             force=force,
             assume_yes=yes,
+            json_out=json_out,
         )
     )
 

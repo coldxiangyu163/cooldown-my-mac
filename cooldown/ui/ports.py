@@ -7,6 +7,9 @@ and the op-log trail behave identically to the ``cool reap`` command.
 """
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
+
 import questionary
 from rich.box import SIMPLE
 from rich.console import Console
@@ -270,12 +273,27 @@ def run(
     force: bool = False,
     assume_yes: bool = False,
     show_all: bool = False,
+    json_out: bool = False,
 ) -> int:
     with console.status("[dim]scanning listening ports...[/]", spinner="dots"):
         # --free works off the raw collection; skip the Apple-noise filter
         # since we're answering "is this port taken by *anything*".
         if free:
             raw = ports_mod.collect()
+            if json_out:
+                # Free-range query: shape stays the same so consumers can
+                # branch on the presence of the "free" key.
+                start, _, end = free.partition(":")
+                if start.isdigit() and end.isdigit():
+                    taken = {e.port for e in raw}
+                    payload = {
+                        "range": [int(start), int(end)],
+                        "free": [p for p in range(int(start), int(end) + 1) if p not in taken],
+                    }
+                else:
+                    payload = {"range": free, "free": []}
+                console.print_json(json.dumps(payload))
+                return 0
             return _print_free(console, raw, free)
 
         entries, launchers, projects = _collect_and_filter(
@@ -285,6 +303,18 @@ def run(
             conflict=conflict,
             show_all=show_all,
         )
+
+    if json_out:
+        rows = [
+            {
+                **asdict(e),
+                "launcher": launchers.get(e.pid, "-"),
+                "project": projects.get(e.pid, ("-", ""))[0],
+            }
+            for e in entries
+        ]
+        console.print_json(json.dumps(rows, default=str))
+        return 0
 
     title = "listening ports"
     if conflict:

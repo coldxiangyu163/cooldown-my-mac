@@ -1,6 +1,9 @@
 """`cool thermal` — thermal dashboard + optional sleep-policy restore."""
 from __future__ import annotations
 
+import json
+from dataclasses import asdict, is_dataclass
+
 from rich.box import SIMPLE
 from rich.console import Console
 from rich.panel import Panel
@@ -123,11 +126,21 @@ def run(
     restore: bool = False,
     dry_run: bool = False,
     assume_yes: bool = False,
+    json_out: bool = False,
 ) -> int:
     with console.status("[dim]sampling thermal + power...[/]", spinner="dots"):
         t = therm_mod.collect()
         s = smc_mod.collect()
         p = sleep_mod.current()
+
+    if json_out:
+        payload = {
+            "pmset": asdict(t) if is_dataclass(t) else t,
+            "smc": asdict(s) if is_dataclass(s) else s,
+            "sleep_policy": asdict(p) if is_dataclass(p) else p,
+        }
+        console.print_json(json.dumps(payload, default=str))
+        return 0
 
     console.print(_pmset_panel(t))
     console.print(_smc_panel(s))

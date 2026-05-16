@@ -6,6 +6,9 @@ machinery (self-protection + op-log) as ``cool procs`` / ``cool reap``.
 """
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
+
 import questionary
 from rich.box import SIMPLE
 from rich.console import Console
@@ -192,6 +195,16 @@ def _apply_filters(
     return out
 
 
+def _devproc_to_dict(d: DevProc) -> dict:
+    data = asdict(d)
+    # asdict() turns the dataclass into a plain dict; flatten Path objects
+    # in the nested Project so json.dumps doesn't choke.
+    proj = data.get("project")
+    if isinstance(proj, dict) and "root" in proj:
+        proj["root"] = str(proj["root"])
+    return data
+
+
 def run(
     console: Console,
     *,
@@ -204,6 +217,7 @@ def run(
     dry_run: bool = False,
     force: bool = False,
     assume_yes: bool = False,
+    json_out: bool = False,
 ) -> int:
     if by not in _GROUP_DIMS:
         console.print(f"[red]invalid --by value[/]: {by!r} (must be one of {sorted(_GROUP_DIMS)})")
@@ -216,6 +230,12 @@ def run(
     devs = _apply_filters(devs, lang=lang, project_filter=project_filter, launcher=launcher)
     if stale_only:
         devs = dev_mod.stale(devs)
+
+    if json_out:
+        console.print_json(
+            json.dumps([_devproc_to_dict(d) for d in devs], default=str)
+        )
+        return 0
 
     if not devs:
         console.print("[dim]no matching dev processes.[/]")

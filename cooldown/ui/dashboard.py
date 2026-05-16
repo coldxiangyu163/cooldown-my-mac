@@ -1,7 +1,10 @@
 """`cool status` one-shot dashboard (Rich, mimicking Mole's layout)."""
 from __future__ import annotations
 
+import json
 import platform
+from dataclasses import asdict, is_dataclass
+from typing import Any
 
 from rich.box import SIMPLE
 from rich.columns import Columns
@@ -327,6 +330,48 @@ def render(console: Console | None = None) -> None:
         console.print(
             "[yellow]hint:[/] idle AI CLI sessions detected — try [cyan]cool reap --dry-run[/]"
         )
+
+
+def _as_jsonable(obj: Any) -> Any:
+    """Recursively convert dataclasses + Paths into JSON-friendly forms."""
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return {k: _as_jsonable(v) for k, v in asdict(obj).items()}
+    if isinstance(obj, dict):
+        return {k: _as_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, list | tuple):
+        return [_as_jsonable(v) for v in obj]
+    if hasattr(obj, "__fspath__"):  # pathlib.Path
+        return str(obj)
+    return obj
+
+
+def render_json(console: Console | None = None) -> None:
+    """Machine-readable equivalent of ``render()`` for scripting."""
+    console = console or Console()
+    sys_stats = sys_mod.collect()
+    mem = mem_mod.collect()
+    therm = therm_mod.collect()
+    procs = procs_mod.collect()
+    procs_mod.enrich_idle(procs)
+    try:
+        batt = batt_mod.collect()
+    except Exception:  # noqa: BLE001
+        batt = None
+    score, _ = _health_score(mem, sys_stats, therm)
+    payload = {
+        "health_score": score,
+        "host": {
+            "node": platform.node(),
+            "machine": platform.machine(),
+            "macos": platform.mac_ver()[0],
+        },
+        "system": _as_jsonable(sys_stats),
+        "memory": _as_jsonable(mem),
+        "thermal": _as_jsonable(therm),
+        "battery": _as_jsonable(batt) if batt is not None else None,
+        "procs": [_as_jsonable(p) for p in procs],
+    }
+    console.print_json(json.dumps(payload, default=str))
 
 
 def render_group(mem: mem_mod.MemoryStats, sys_stats: sys_mod.SystemStats) -> Group:
