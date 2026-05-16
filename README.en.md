@@ -7,9 +7,8 @@
 </p>
 
 <p align="center">
-  <b>A runtime thermal &amp; workload manager for heavy Mac users</b><br>
-  Tames the pile of AI CLIs (droid · codex · claude · cursor-agent ...) you keep running 24/7,<br>
-  reaping idle sessions <em>before</em> they overheat your Mac.
+  <b>A runtime thermal / workload CLI for heavy Mac users</b><br>
+  Reaps the AI CLIs (droid · codex · claude · cursor-agent ...) you leave running 24/7 — <em>before</em> they overheat your Mac.
 </p>
 
 <p align="center">
@@ -29,7 +28,9 @@
 - 5 AI CLIs each spawned their own copy of MCP tools — 100+ node processes total
 - After a reboot, a pile of LaunchAgents / mysql / postgres comes back; nobody remembers why
 
-`cool` is a macOS CLI that attributes every process across three axes — **project / AI CLI / launcher** — and gives you batch reaping, memory-pressure guarding, and a 24/7 launchd-managed daemon. It does **not replace** [Mole](https://github.com/tw93/Mole) (disk) / [mactop](https://github.com/context-labs/mactop) (hardware readings) / [stats](https://github.com/exelban/stats) (menu bar); it fills the gap they leave — your dev workload.
+`cool` is a macOS CLI that attributes every process across three axes — **project / AI CLI / launcher** — and gives you batch reaping, memory-pressure guarding, and a 24/7 launchd-managed daemon.
+
+It does **not replace** [Mole](https://github.com/tw93/Mole) (disk) / [mactop](https://github.com/context-labs/mactop) (hardware readings) / [stats](https://github.com/exelban/stats) (menu bar) — it fills the gap they leave: your dev workload.
 
 ## Highlights
 
@@ -58,7 +59,7 @@
 
 ## Sample output
 
-`cool dev` on a typical Mac with a few AI CLIs running:
+Real `cool dev` output on a Mac with a few AI CLIs running:
 
 ```text
 PROJECT                                 #      RSS  LANGS     LAUNCHERS
@@ -116,40 +117,6 @@ By use case:
 
 Every command takes `--help` for its full flag set. The most common invocations:
 
-**Dev-stack insight `cool dev` · `cool ports`**
-```bash
-cool dev                          # group by project: RSS / CPU / idle / launcher
-cool dev --by launcher --stale    # orphans + stale projects, by launcher; --kill for interactive
-cool ports 5432                   # who owns :5432? --free 4000:4100 lists free slots
-```
-
-**Process reaping `cool procs` · `cool reap`** — self-protection + SIGTERM/3s/SIGKILL + [oplog](#how-it-works)
-```bash
-cool procs                        # list every AI CLI / multiplexer, multi-select kill
-cool reap --dry-run               # preview reapable AI CLI / tmux idle ≥ 30 min
-cool reap --kinds droid,claude --yes        # narrow to families, skip confirm
-```
-
-**Memory pressure `cool pressure`**
-```bash
-cool pressure --watch -n 60                                     # poll every 60 s
-cool pressure --watch --auto-reap --auto-purge --notify --yes   # 24 h guardian combo
-```
-
-**Services & apps `cool services` · `cool apps`**
-```bash
-cool services stop mysql postgres -y                  # batch-stop dev services
-cool apps suspend --kind wechat --kind dingtalk -y    # IM SIGSTOP (keeps state, stops CPU)
-cool apps resume --kind wechat -y                     # SIGCONT
-```
-
-**Thermal / launchd / daemon `cool thermal` · `cool launchd` · `cool daemon`**
-```bash
-cool thermal --restore            # reset displaysleep / disksleep / unblock sleep
-cool launchd --audit --disable    # list third-party agents + interactive bootout (Apple refused)
-cool daemon install               # register the 24/7 LaunchAgent
-```
-
 **Live dashboard `cool watch`** — dual-tempo refresh: fast tick (3 s) samples CPU/Memory/Thermal/Battery/AI CLI; slow tick (15 s) samples Top Projects/Ports. Screenshot at [top](#cooldown-my-mac).
 
 ```text
@@ -186,6 +153,40 @@ cool daemon install               # register the 24/7 LaunchAgent
 
 </details>
 
+**Dev-stack insight `cool dev` · `cool ports`**
+```bash
+cool dev                          # group by project: RSS / CPU / idle / launcher
+cool dev --by launcher --stale    # orphans + stale projects, by launcher; --kill for interactive
+cool ports 5432                   # who owns :5432? --free 4000:4100 lists free slots
+```
+
+**Process reaping `cool procs` · `cool reap`** — self-protection + SIGTERM/3s/SIGKILL + [oplog](#how-it-works)
+```bash
+cool procs                        # list every AI CLI / multiplexer, multi-select kill
+cool reap --dry-run               # preview reapable AI CLI / tmux idle ≥ 30 min
+cool reap --kinds droid,claude --yes        # narrow to families, skip confirm
+```
+
+**Memory pressure `cool pressure`**
+```bash
+cool pressure --watch -n 60                                     # poll every 60 s
+cool pressure --watch --auto-reap --auto-purge --notify --yes   # 24 h guardian combo
+```
+
+**Services & apps `cool services` · `cool apps`**
+```bash
+cool services stop mysql postgres -y                  # batch-stop dev services
+cool apps suspend --kind wechat --kind dingtalk -y    # IM SIGSTOP (keeps state, stops CPU)
+cool apps resume --kind wechat -y                     # SIGCONT
+```
+
+**Thermal / launchd / daemon `cool thermal` · `cool launchd` · `cool daemon`**
+```bash
+cool thermal --restore            # reset displaysleep / disksleep / unblock sleep
+cool launchd --audit --disable    # list third-party agents + interactive bootout (Apple refused)
+cool daemon install               # register the 24/7 LaunchAgent
+```
+
 <details>
 <summary>Sample YAML rule config (<code>~/.config/cooldown/config.yaml</code>)</summary>
 
@@ -209,6 +210,8 @@ rules:
 </details>
 
 ## How it works
+
+Two internals people often ask about — expand to read:
 
 <details>
 <summary>Attribution pipeline: a 7-step chain so <code>Top Projects</code> never shows <code>cwd unknown</code></summary>
@@ -270,8 +273,6 @@ A: `purge` is a first-party macOS command that drops the inactive filesystem cac
 A: Yes. Topology displays as "NP+0E" (Intel has no E-cores). The battery parser includes Intel's deci-Kelvin decoder. Thermal / battery data are richer on Apple Silicon.
 
 ## Roadmap
-
-Not yet:
 
 - [ ] Network panel (up/down sparklines)
 - [ ] Disk Trash / big-file locator
