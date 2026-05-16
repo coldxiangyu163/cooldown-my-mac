@@ -52,12 +52,17 @@ def test_watch_app_has_required_bindings():
         assert expected in keys, f"missing binding: {expected!r} (have {keys})"
 
 
-def test_watch_app_compose_contains_header_healthbar_body_footer():
+def test_watch_app_compose_contains_healthbar_body_footer():
     app_cls = watch._build_app_class()
     app = app_cls(fast_interval=3, slow_interval=15)
     widgets = list(app.compose())
-    # Header + healthbar Static + Grid(body) + Footer
-    assert len(widgets) == 4, f"expected 4 top-level widgets, got {len(widgets)}"
+    # The default Textual Header was removed so the custom healthbar
+    # can be the sole designed top strip (clock folded into it). Three
+    # top-level widgets: healthbar Static + Grid(body) + Footer.
+    assert len(widgets) == 3, f"expected 3 top-level widgets, got {len(widgets)}"
+    ids = [getattr(w, "id", None) for w in widgets]
+    assert "healthbar" in ids
+    assert "body" in ids
 
 
 def test_watch_app_title_and_default_intervals():

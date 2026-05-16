@@ -18,7 +18,7 @@ from ..collectors import memory as mem_mod
 from ..collectors import procs as procs_mod
 from ..collectors import system as sys_mod
 from ..collectors import thermal as therm_mod
-from ..util import bar, human_bytes, human_duration, sparkline
+from ..util import bar, heatbar, human_bytes, human_duration, sparkline
 
 # ---------------------------------------------------------------------------
 # Severity colour policy (keep in lock-step across all panels)
@@ -42,6 +42,73 @@ def _pct_color(pct: float) -> str:
     if pct >= 50:
         return "cyan"
     return "green"
+
+
+# ---------------------------------------------------------------------------
+# Border-title summaries — keep the panel self-documenting at a glance
+# ---------------------------------------------------------------------------
+# Each info panel exposes a small ``title_summary_*`` helper that returns
+# the markup for "noun [dim]· severity-dot headline-value[/]". The tables
+# already follow this pattern (rounds 3); these helpers extend it to the
+# four info panels so the entire grid shares one title rhythm.
+
+def cpu_title_summary(sys_stats: sys_mod.SystemStats) -> str:
+    """Return ``CPU  · ● 40.9%`` style border-title markup."""
+    pct = sys_stats.cpu_percent
+    color = _pct_color(pct)
+    return f"CPU  [dim]·[/] [{color}]●[/] [{color}]{pct:.1f}%[/]"
+
+
+def mem_title_summary(mem: mem_mod.MemoryStats) -> str:
+    """Return ``Memory  · ● 73.8% · critical`` style border-title markup.
+
+    Pressure level is appended as a dim suffix when it escalates to
+    warn/critical so the title alone tells you "memory is in trouble"
+    without needing to look at the Pressure row.
+    """
+    pct = mem.used_percent
+    color = _pct_color(pct)
+    base = f"Memory  [dim]·[/] [{color}]●[/] [{color}]{pct:.1f}%[/]"
+    lvl = (mem.pressure_level or "").lower()
+    if lvl == "critical":
+        base += "  [bold red]· critical[/]"
+    elif lvl == "warn":
+        base += "  [yellow]· warn[/]"
+    return base
+
+
+def thermal_title_summary(t: therm_mod.ThermalStats) -> str:
+    """Return ``Thermal  · ● ok`` / ``▲ throttled`` style markup."""
+    if t.thermal_warning and t.thermal_warning != "none":
+        return f"Thermal  [dim]·[/] [bold red]▲ {t.thermal_warning}[/]"
+    if "throttled" in (t.cpu_power_status or "").lower():
+        return f"Thermal  [dim]·[/] [bold red]▲ throttled[/]"
+    if t.sleep_prevented:
+        return f"Thermal  [dim]·[/] [bold red]▲ sleep blocked[/]"
+    if t.low_power_mode:
+        return f"Thermal  [dim]·[/] [yellow]◆ low-power[/]"
+    return "Thermal  [dim]·[/] [green]● ok[/]"
+
+
+def battery_title_summary(b: batt_mod.BatteryStats | None) -> str:
+    """Return ``Battery  · ● 100% · 30.6°C`` style markup.
+
+    Both Level and Temp get their own severity dot — they're the two
+    independent axes the user cares about (charge state + heat).
+    """
+    if b is None:
+        return "Battery  [dim]· no battery[/]"
+    parts = ["Battery"]
+    bits: list[str] = []
+    if b.percent is not None:
+        lc = "green" if b.percent >= 40 else "yellow" if b.percent >= 15 else "bold red"
+        bits.append(f"[{lc}]●[/] [{lc}]{b.percent:.0f}%[/]")
+    if b.temp_c is not None:
+        tc = "bold red" if b.temp_c >= 40 else "yellow" if b.temp_c >= 35 else "green"
+        bits.append(f"[{tc}]●[/] [{tc}]{b.temp_c:.1f}°C[/]")
+    if bits:
+        parts.append(f"[dim]·[/] {'  '.join(bits)}")
+    return "  ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +152,100 @@ KIND_COLORS: dict[str, str] = {
 
 def kind_color(kind: str) -> str:
     return KIND_COLORS.get(kind, "yellow")
+
+
+def idle_color(seconds: float) -> str:
+    """Severity colour for an AI CLI session's idle duration.
+
+    Thresholds align with ``cool reap``'s default idle gate (30 min by
+    default — anything above that is the precise set the user would
+    reap). Reading down the IDLE column should now answer "which rows
+    are reapable?" without reading any numbers.
+
+      * < 60s    → green   (active, do not touch)
+      * < 10m    → cyan    (paused but recent)
+      * < 30m    → yellow  (warming up to reapable)
+      * ≥ 30m    → bold red (stale, prime candidate for reap)
+    """
+    if seconds >= 1800:
+        return "bold red"
+    if seconds >= 600:
+        return "yellow"
+    if seconds >= 60:
+        return "cyan"
+    return "green"
+
+
+# ---------------------------------------------------------------------------
+# Secondary palettes — langs and launchers shown in the project / ports tables
+# ---------------------------------------------------------------------------
+# These chips show up in the langs / launchers columns of Top Projects and
+# in the launcher column of Listening Ports. Without colour, they render as
+# grey comma-joined strings that the eye glosses over. Reuse the kind palette
+# where there's overlap (claude/codex/tmux launchers); otherwise pick brand-
+# aligned terminal colours so a user can identify "node project · started
+# from VS Code" at a glance without reading the labels.
+_LANG_COLORS: dict[str, str] = {
+    "node":   "bright_green",
+    "deno":   "bright_white",
+    "bun":    "bright_yellow",
+    "python": "bright_blue",
+    "ruby":   "bright_red",
+    "go":     "cyan",
+    "rust":   "red",
+    "java":   "yellow",
+    "php":    "blue",
+    "dotnet": "magenta",
+}
+
+_LAUNCHER_COLORS: dict[str, str] = {
+    # Editor-class launchers — desaturated so they don't compete with
+    # the AI CLI kinds when both are present in the same row.
+    "vscode":    "bright_blue",
+    "cursor":    "cyan",
+    "datagrip":  "bright_magenta",
+    "jetbrains": "magenta",
+    "finder":    "dim",
+    # System-class launchers — always dim so they read as "just the OS".
+    "launchd":   "dim",
+    "shell":     "dim",
+    "iterm":     "dim cyan",
+    "terminal":  "dim cyan",
+    "unknown":   "dim",
+}
+
+
+def _token_color(token: str) -> str:
+    """Resolve a single token to a colour, falling through three palettes.
+
+    Order: kind (claude/codex/...) → launcher (vscode/launchd/...) → lang
+    (node/python/...) → dim default. The order matters because the kind
+    palette is the most established / brand-tied and should win on
+    collisions.
+    """
+    if token in KIND_COLORS:
+        return KIND_COLORS[token]
+    if token in _LAUNCHER_COLORS:
+        return _LAUNCHER_COLORS[token]
+    if token in _LANG_COLORS:
+        return _LANG_COLORS[token]
+    return "dim"
+
+
+def chip_tokens(s: str) -> str:
+    """Render a comma-joined token list as colour-coded chips.
+
+    Replaces raw ``"node,vscode,claude"`` cells (which read as a grey
+    blob) with ``"node · vscode · claude"`` where each token carries
+    its semantic colour. Tokens unknown to all three palettes render
+    dim so the row remains visually quiet for noise tokens.
+    """
+    if not s or s == "-":
+        return "[dim]–[/]"
+    tokens = [t.strip() for t in s.split(",") if t.strip()]
+    if not tokens:
+        return "[dim]–[/]"
+    return " [dim]·[/] ".join(f"[{_token_color(t)}]{t}[/]" for t in tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -150,8 +311,15 @@ def decorate_project_name(name: str, *, max_width: int = 32, orphan: bool = Fals
 
 
 def _kv(rows: list[tuple[str, str]]) -> Table:
+    # Fixed-width label column (min_width=8) lets the four info panels
+    # share a consistent left-edge rhythm — the right edges of the
+    # labels in CPU / Memory / Thermal / Battery all line up at the
+    # same offset from each panel's border, so the eye perceives a
+    # shared "label gutter" across the grid rather than four independent
+    # tables. 8 chars fits the widest label ("Pressure"); shorter
+    # labels render right-justified inside the padded width.
     t = Table.grid(padding=(0, 1))
-    t.add_column(style="dim", justify="right")
+    t.add_column(style="dim", justify="right", min_width=8)
     t.add_column()
     for k, v in rows:
         t.add_row(k, v)
@@ -176,10 +344,11 @@ def _cpu_content(
     pct = sys_stats.cpu_percent
     color = _pct_color(pct)
     if history:
-        spark = sparkline(history, hi=100.0, width=20)
-        total_cell = (
-            f"[{color}]{bar(pct)} {pct:5.1f}%[/]  [dim]{spark}[/]"
-        )
+        # Per-sample severity-coloured history — recent spikes show as
+        # red blocks at the right edge so "stressed for the last 30
+        # seconds" reads differently from "just spiked once".
+        spark = heatbar(history, hi=100.0, width=20)
+        total_cell = f"[{color}]{bar(pct)} {pct:5.1f}%[/]  {spark}"
     else:
         total_cell = f"[{color}]{bar(pct)} {pct:5.1f}%[/]"
     rows: list[tuple[str, str]] = [
@@ -190,45 +359,131 @@ def _cpu_content(
     if per:
         p_end = min(host.perf_cores or len(per), len(per))
         if p_end:
-            p_avg = sum(per[:p_end]) / p_end
-            p_max = max(per[:p_end])
+            p_cores = per[:p_end]
+            p_avg = sum(p_cores) / p_end
+            p_max = max(p_cores)
+            p_hot = p_cores.index(p_max)
+            # Inline per-core heatmap (btop-style): each P-core renders
+            # as a single coloured block whose height = current load.
+            # Avg/max numerics stay alongside for precision; the hottest
+            # core's index is called out so spatial peaks read at-a-glance.
             rows.append((
                 "P-cores",
-                f"[{_pct_color(p_avg)}]{bar(p_avg)} avg {p_avg:5.1f}%[/]  "
-                f"max [{_pct_color(p_max)}]{p_max:5.1f}%[/]  "
-                f"(×{p_end})",
+                f"{heatbar(p_cores)}  "
+                f"[{_pct_color(p_avg)}]avg {p_avg:5.1f}%[/]  "
+                f"max [{_pct_color(p_max)}]{p_max:5.1f}%[/] "
+                f"[dim]P{p_hot + 1}[/]  "
+                f"[dim](×{p_end})[/]",
             ))
         if p_end < len(per):
             e = per[p_end:]
             e_avg = sum(e) / len(e)
             e_max = max(e)
+            e_hot = e.index(e_max)
             rows.append((
                 "E-cores",
-                f"[{_pct_color(e_avg)}]{bar(e_avg)} avg {e_avg:5.1f}%[/]  "
-                f"max [{_pct_color(e_max)}]{e_max:5.1f}%[/]  "
-                f"(×{len(e)})",
+                f"{heatbar(e)}  "
+                f"[{_pct_color(e_avg)}]avg {e_avg:5.1f}%[/]  "
+                f"max [{_pct_color(e_max)}]{e_max:5.1f}%[/] "
+                f"[dim]E{e_hot + 1}[/]  "
+                f"[dim](×{len(e)})[/]",
             ))
-        # Top-3 hottest individual cores, Mole-style. Surfaces "Core 5 pinned
-        # at 100%" which otherwise disappears inside the P/E average.
-        ranked = sorted(enumerate(per), key=lambda iv: iv[1], reverse=True)
-        for idx, val in ranked[:3]:
-            label = f"P{idx + 1}" if idx < p_end else f"E{idx - p_end + 1}"
-            rows.append((
-                f"Core {label}",
-                f"[{_pct_color(val)}]{bar(val)} {val:5.1f}%[/]",
-            ))
-    rows.append((
-        "Load",
-        f"{sys_stats.load_1:.2f} / {sys_stats.load_5:.2f} / {sys_stats.load_15:.2f}"
-        + (f"  [dim]{sys_stats.topology}[/]" if sys_stats.topology else ""),
-    ))
-    rows.append(("Uptime", human_duration(sys_stats.uptime)))
-    rows.append(("Processes", str(sys_stats.total_processes)))
+    # Footer strip — Load / Uptime / Process count are slow-changing
+    # reference numbers that don't deserve hero-row weight. Match the
+    # Battery panel's pattern: one dim line with severity colour kept
+    # on the load_1 value (the only one that meaningfully spikes).
+    cores = sys_stats.cpu_count_logical or 1
+    load_1 = sys_stats.load_1
+    if load_1 >= 2 * cores:
+        load_color = "bold red"
+    elif load_1 >= cores:
+        load_color = "yellow"
+    else:
+        load_color = "green"
+    foot_parts = [
+        f"[dim]load[/] [{load_color}]{load_1:.2f}[/] "
+        f"[dim]/ {sys_stats.load_5:.2f} / {sys_stats.load_15:.2f}[/]",
+    ]
+    if sys_stats.topology:
+        foot_parts.append(f"[dim]{sys_stats.topology}[/]")
+    foot_parts.append(f"[dim]up {human_duration(sys_stats.uptime)}[/]")
+    foot_parts.append(f"[dim]{sys_stats.total_processes} procs[/]")
+    rows.append(("", "  ".join(foot_parts)))
     return _kv(rows)
 
 
 def _cpu_panel(sys_stats: sys_mod.SystemStats) -> Panel:
-    return Panel(_cpu_content(sys_stats), title="[bold]CPU[/]", box=SIMPLE, border_style="blue")
+    return Panel(
+        _cpu_content(sys_stats),
+        title=Text.from_markup(cpu_title_summary(sys_stats)),
+        box=SIMPLE,
+        border_style="blue",
+    )
+
+
+_MEM_SEGMENTS: tuple[tuple[str, str], ...] = (
+    # (attr-name-or-derived, colour) — order matters for visual stacking
+    # in the composition bar: pinned/hard memory on the left, recoverable
+    # on the right. Mirrors Activity Monitor / Stats.app's layout so
+    # users transferring from those tools read it the same way.
+    ("wired",      "bright_red"),
+    ("compressed", "bright_yellow"),
+    ("active",     "cyan"),
+    ("free",       "dim white"),
+)
+
+
+def _memory_composition(mem: mem_mod.MemoryStats, *, width: int = 24) -> tuple[str, str]:
+    """Return ``(bar_markup, legend_markup)`` for a segmented memory bar.
+
+    The bar splits ``mem.total`` into four colour-coded segments —
+    Wired (pinned) · Compressed (under pressure) · Active (other used)
+    · Free (recoverable). Block counts use largest-remainder rounding
+    so segments always sum to exactly ``width`` blocks regardless of
+    fractional shares. Legend echoes each segment's colour with a small
+    ■ swatch + byte value so the bar's colour code is self-documenting.
+    """
+    total = mem.total or 1
+    wired = mem.wired
+    compressed = mem.compressed
+    # "Active" = the part of `used` that is neither wired nor
+    # compressed (apps, kernel structures). Clamp to 0 because macOS
+    # sometimes reports a few MB of slop between collectors.
+    active = max(0, mem.used - wired - compressed)
+    free = max(0, total - mem.used)
+    sizes = {"wired": wired, "compressed": compressed, "active": active, "free": free}
+
+    raw = [sizes[name] / total * width for name, _ in _MEM_SEGMENTS]
+    floors = [int(r) for r in raw]
+    remaining = width - sum(floors)
+    # Largest-remainder method: hand spare blocks to whichever segment
+    # was rounded down most aggressively. Keeps segments visible even
+    # when one is tiny relative to total RAM.
+    order = sorted(range(len(raw)), key=lambda i: -(raw[i] - floors[i]))
+    for i in order[:remaining]:
+        floors[i] += 1
+
+    bar_parts: list[str] = []
+    for (_, color), n in zip(_MEM_SEGMENTS, floors):
+        if n > 0:
+            bar_parts.append(f"[{color}]{'█' * n}[/]")
+    bar_str = "".join(bar_parts) or f"[dim]{'░' * width}[/]"
+
+    legend_parts: list[str] = []
+    for (name, color), n in zip(_MEM_SEGMENTS, floors):
+        # Hide segments that rounded to zero blocks — surfacing a "0B"
+        # swatch in the legend just adds noise when there's nothing to
+        # see in the bar itself.
+        if n == 0 and sizes[name] == 0:
+            continue
+        swatch_style = color if n > 0 else "dim"
+        label_style = "dim" if name == "free" else color
+        legend_parts.append(
+            f"[{swatch_style}]■[/] [{label_style}]{name}[/] "
+            f"[dim]{human_bytes(sizes[name])}[/]"
+        )
+    legend_str = "  ".join(legend_parts)
+    return bar_str, legend_str
 
 
 def _mem_content(
@@ -240,49 +495,42 @@ def _mem_content(
     color = _pct_color(used_pct)
     swap_pct = (mem.swap_used / mem.swap_total * 100.0) if mem.swap_total else 0.0
     swap_color = _pct_color(swap_pct)
-    used_cell = (
-        f"[{color}]{bar(used_pct)} {used_pct:5.1f}%[/]  "
-        f"{human_bytes(mem.used)} / {human_bytes(mem.total)}"
+
+    bar_str, legend_str = _memory_composition(mem)
+    headline = (
+        f"{bar_str}  "
+        f"[{color}]{used_pct:5.1f}%[/]  "
+        f"[dim]{human_bytes(mem.used)} / {human_bytes(mem.total)}[/]"
     )
     if history:
-        used_cell += f"  [dim]{sparkline(history, hi=100.0, width=20)}[/]"
-    return _kv(
-        [
-            (
-                "Used",
-                used_cell,
-            ),
-            ("Avail", human_bytes(mem.available)),
-            ("Wired", human_bytes(mem.wired)),
-            (
-                "Compressed",
-                # Compressed memory is one of macOS's main responses to
-                # pressure; once it climbs past ~25% of total RAM you're
-                # already paying a CPU tax. Surface the ratio inline so
-                # users see "26.3GB (41%)" instead of just a raw byte
-                # count that doesn't mean much on its own.
-                f"{human_bytes(mem.compressed)}"
-                + (
-                    f"  [dim]({mem.compressed / mem.total * 100:.0f}%)[/]"
-                    if mem.total
-                    else ""
-                ),
-            ),
-            (
-                "Swap",
-                f"[{swap_color}]{bar(swap_pct)} {swap_pct:5.1f}%[/]  "
-                f"{human_bytes(mem.swap_used)} / {human_bytes(mem.swap_total)}"
-                if mem.swap_total
-                else "unused",
-            ),
-            ("Pressure", _pressure_badge(mem.pressure_level)),
-        ]
-    )
+        # Severity-coloured history — same visual language as the CPU
+        # panel so stress patterns read consistently across panels.
+        headline += f"  {heatbar(history, hi=100.0, width=20)}"
+
+    rows: list[tuple[str, str]] = [
+        ("Used", headline),
+        # Legend sits on its own row with an empty label so it visually
+        # belongs to the bar above it (Stats.app uses the same
+        # "swatches under the bar" pattern).
+        ("", legend_str),
+        (
+            "Swap",
+            f"[{swap_color}]{bar(swap_pct, width=12)} {swap_pct:5.1f}%[/]  "
+            f"[dim]{human_bytes(mem.swap_used)} / {human_bytes(mem.swap_total)}[/]"
+            if mem.swap_total
+            else "[dim]unused[/]",
+        ),
+        ("Pressure", _pressure_badge(mem.pressure_level)),
+    ]
+    return _kv(rows)
 
 
 def _mem_panel(mem: mem_mod.MemoryStats) -> Panel:
     return Panel(
-        _mem_content(mem), title="[bold]Memory[/]", box=SIMPLE, border_style="magenta"
+        _mem_content(mem),
+        title=Text.from_markup(mem_title_summary(mem)),
+        box=SIMPLE,
+        border_style="magenta",
     )
 
 
@@ -296,67 +544,91 @@ def _pressure_badge(level: str) -> str:
 
 
 def _thermal_content(t: therm_mod.ThermalStats) -> Table:
-    """Thermal / power summary.
+    """Thermal / power summary, clustered into three semantic rows.
 
-    Every row is prefixed with a colour-coded status glyph so the eye
-    can scan a single column (green ● / yellow ◆ / red ▲) to spot
-    trouble before reading any of the values.
+    Earlier versions rendered each pmset/SMC field on its own row,
+    which made the panel scream "three red things!" whenever sleep
+    was prevented — but display-sleep / disk-sleep / sleep-state are
+    one problem, not three. Grouping by what the user actually cares
+    about (thermal headroom · power source · sleep behaviour) cuts the
+    panel to three rows and matches how Activity Monitor's Energy tab
+    presents the same info.
+
+    Single-colour glyphs only (kind-table calm-color rule): the dot
+    carries severity, the label text stays neutral so the panel reads
+    like a status card instead of a wall of coloured text.
     """
-    def _ok(text: str) -> str:
-        return f"[green]●[/]  [green]{text}[/]"
+    def _chip(glyph: str, color: str, text: str) -> str:
+        # Glyph carries severity colour; text stays neutral so a row
+        # with three chips doesn't read like three competing alarms.
+        return f"[{color}]{glyph}[/] {text}"
 
-    def _warn(text: str) -> str:
-        return f"[yellow]◆[/]  [yellow]{text}[/]"
+    OK, WARN, CRIT, IDLE = ("●", "green"), ("◆", "yellow"), ("▲", "bold red"), ("○", "dim")
 
-    def _crit(text: str) -> str:
-        return f"[bold red]▲[/]  [bold red]{text}[/]"
-
-    def _dim(text: str) -> str:
-        return f"[dim]○[/]  [dim]{text}[/]"
-
-    warning_cell = _ok("none") if t.thermal_warning == "none" else _crit(t.thermal_warning)
-
-    if "throttled" in (t.cpu_power_status or ""):
-        cpu_cell = _crit(t.cpu_power_status)
-    elif (t.cpu_power_status or "").lower() == "normal":
-        cpu_cell = _ok("normal")
+    # ── Thermal row ── headroom, throttling, low-power mode all chip
+    # together because they describe the same axis: "is the CPU free
+    # to run at full clock?"
+    if t.thermal_warning == "none":
+        thermal_chip = _chip(*OK, "no warning")
     else:
-        cpu_cell = _dim(t.cpu_power_status or "?")
+        thermal_chip = _chip(*CRIT, f"warning {t.thermal_warning}")
 
-    lowpower_cell = _warn("on") if t.low_power_mode else _ok("off")
+    cpu_status = (t.cpu_power_status or "").lower()
+    if "throttled" in cpu_status:
+        cpu_chip = _chip(*CRIT, f"CPU {t.cpu_power_status}")
+    elif cpu_status == "normal":
+        cpu_chip = _chip(*OK, "CPU normal")
+    else:
+        cpu_chip = _chip(*IDLE, f"CPU {t.cpu_power_status or '?'}")
 
-    pct = f"{t.battery_percent}%" if t.battery_percent is not None else ""
+    lowpower_chip = (
+        _chip(*WARN, "low-power on") if t.low_power_mode
+        else _chip(*OK, "low-power off")
+    )
+
+    # ── Power row ── AC vs battery + percentage. Single chip because
+    # there is only one axis here.
+    pct = f" {t.battery_percent}%" if t.battery_percent is not None else ""
     if t.ac_power:
-        power_cell = _ok(f"AC {pct}".rstrip())
+        power_chip = _chip(*OK, f"AC{pct}")
     elif t.battery_percent is not None and t.battery_percent < 20:
-        power_cell = _warn(f"battery {pct}")
+        power_chip = _chip(*WARN, f"battery{pct}")
     else:
-        power_cell = _dim(f"battery {pct}".rstrip())
+        power_chip = _chip(*IDLE, f"battery{pct}")
 
-    def _sleep_cell(minutes: int | None) -> str:
+    # ── Sleep row ── lead with the conclusion (prevented/allowed),
+    # then dim-inline the timeout details so the symptom is still
+    # surfaceable without three duplicate red rows.
+    def _sleep_label(minutes: int | None) -> str:
         if minutes is None:
-            return _dim("?")
+            return "?"
         if minutes == 0:
-            return _crit("never")
-        return _ok(f"{minutes} min")
+            return "never"
+        return f"{minutes}m"
 
-    sleep_state_cell = _crit("prevented") if t.sleep_prevented else _ok("allowed")
+    if t.sleep_prevented:
+        sleep_lead = _chip(*CRIT, "prevented")
+    else:
+        sleep_lead = _chip(*OK, "allowed")
+    sleep_detail = (
+        f"[dim]display {_sleep_label(t.display_sleep)} · "
+        f"disk {_sleep_label(t.disk_sleep)}[/]"
+    )
 
     rows = [
-        ("Warning", warning_cell),
-        ("CPU power", cpu_cell),
-        ("Low power", lowpower_cell),
-        ("Power src", power_cell),
-        ("Display sleep", _sleep_cell(t.display_sleep)),
-        ("Disk sleep", _sleep_cell(t.disk_sleep)),
-        ("Sleep state", sleep_state_cell),
+        ("Thermal", f"{thermal_chip}  {cpu_chip}  {lowpower_chip}"),
+        ("Power",   power_chip),
+        ("Sleep",   f"{sleep_lead}  {sleep_detail}"),
     ]
     return _kv(rows)
 
 
 def _thermal_panel(t: therm_mod.ThermalStats) -> Panel:
     return Panel(
-        _thermal_content(t), title="[bold]Thermal / Power[/]", box=SIMPLE, border_style="red"
+        _thermal_content(t),
+        title=Text.from_markup(thermal_title_summary(t)),
+        box=SIMPLE,
+        border_style="red",
     )
 
 
@@ -379,7 +651,13 @@ def _battery_content(b: batt_mod.BatteryStats | None) -> Table:
             ]
         )
 
+    # Two-tier layout (iStat Menus / iPhone Settings pattern):
+    #   * Hero rows — Level + Temp. These are the at-a-glance answers.
+    #   * Footer strip — Health · Cycles · Flow · time-remaining. These
+    #     change slowly or not at all per tick, so they recede to a
+    #     single dim line that the user reads once and moves on.
     rows: list[tuple[str, str]] = []
+
     if b.percent is not None:
         color = "green" if b.percent >= 40 else "yellow" if b.percent >= 15 else "bold red"
         pct_cell = f"[{color}]{bar(b.percent)} {b.percent:5.1f}%[/]"
@@ -394,37 +672,55 @@ def _battery_content(b: batt_mod.BatteryStats | None) -> Table:
         rows.append(("Level", pct_cell))
 
     if b.temp_c is not None:
+        # Temp deserves the same visual weight as Level here because
+        # battery cell temperature is the headline signal this whole
+        # tool exists to surface. Add a 12-block thermometer bar with
+        # the same colour scale used elsewhere (green / yellow / red),
+        # mapped against a 50°C top (40°C ≈ 80% of the bar — hot).
         temp_color = (
             "bold red" if b.temp_c >= 40 else "yellow" if b.temp_c >= 35 else "green"
         )
-        rows.append(("Temp", f"[{temp_color}]{b.temp_c:.1f}°C[/]"))
+        temp_pct = max(0.0, min(100.0, (b.temp_c / 50.0) * 100.0))
+        rows.append(
+            (
+                "Temp",
+                f"[{temp_color}]{bar(temp_pct, width=12)} {b.temp_c:.1f}°C[/]",
+            )
+        )
 
+    # Footer strip — combine Health, Cycles, charge flow, and
+    # time-remaining into a single dim line. Severity colours still
+    # apply to the individual values so a degraded battery (low
+    # health, high cycles) is still findable, but the surrounding
+    # labels are dim so the row reads as quiet reference info.
+    foot_parts: list[str] = []
     if b.health_percent is not None:
         h = b.health_percent
         h_color = "green" if h >= 85 else "yellow" if h >= 70 else "bold red"
-        rows.append(("Health", f"[{h_color}]{h:.1f}%[/]"))
-
+        foot_parts.append(f"[dim]health[/] [{h_color}]{h:.1f}%[/]")
     if b.cycle_count is not None:
         # Apple rates most batteries for 1000 cycles — warn past 800.
         c_color = "green" if b.cycle_count < 600 else "yellow" if b.cycle_count < 900 else "bold red"
-        rows.append(("Cycles", f"[{c_color}]{b.cycle_count}[/]"))
-
-    bits: list[str] = []
+        foot_parts.append(f"[dim]cycles[/] [{c_color}]{b.cycle_count}[/]")
     if b.power_w is not None and abs(b.power_w) > 0.05:
         sign = "+" if b.charging and b.power_w > 0 else ""
-        bits.append(f"{sign}{b.power_w:.1f}W")
+        foot_parts.append(f"[dim]{sign}{b.power_w:.1f}W[/]")
     if b.minutes_remaining is not None:
         h, m = divmod(b.minutes_remaining, 60)
-        bits.append(f"{h}h{m:02d}m" if h else f"{m}m")
-    if bits:
-        rows.append(("Flow", "  ·  ".join(bits)))
+        rem = f"{h}h{m:02d}m" if h else f"{m}m"
+        foot_parts.append(f"[dim]{rem} left[/]")
+    if foot_parts:
+        rows.append(("", "  ".join(foot_parts)))
 
     return _kv(rows)
 
 
 def _battery_panel(b: batt_mod.BatteryStats | None) -> Panel:
     return Panel(
-        _battery_content(b), title="[bold]Battery[/]", box=SIMPLE, border_style="green"
+        _battery_content(b),
+        title=Text.from_markup(battery_title_summary(b)),
+        box=SIMPLE,
+        border_style="green",
     )
 
 
@@ -455,12 +751,18 @@ def _cli_panel(procs: list[procs_mod.ProcInfo]) -> Panel:
         # bouncing between the two views never sees claude rendered in
         # two different colours.
         color = kind_color(kind)
+        idle_clr = idle_color(max_idle)
+        # Colour lives on the family dot only; kind name stays bold
+        # neutral. Same rule as `cool watch` — keeps a 6-kind inventory
+        # legible instead of looking like confetti.
+        # Idle duration gets severity colour so long-idle (= reapable)
+        # rows surface visibly without reading numbers.
         table.add_row(
-            f"[{color}]●[/] [{color}]{kind}[/]",
+            f"[{color}]●[/] [bold]{kind}[/]",
             str(len(items)),
             human_bytes(total_rss),
             f"{total_cpu:.1f}",
-            human_duration(max_idle),
+            f"[{idle_clr}]{human_duration(max_idle)}[/]",
         )
         grand_total_procs += len(items)
         grand_total_rss += total_rss
@@ -688,8 +990,11 @@ def _dev_panel(limit: int = 5) -> Panel:
     table.add_column("project")
     table.add_column("count", justify="right")
     table.add_column("total RSS", justify="right")
-    table.add_column("langs", style="dim")
-    table.add_column("launchers", style="dim")
+    # langs/launchers use chip_tokens() for per-token colour, so the
+    # column-level dim style is dropped — chip colours win and dim
+    # noise tokens are already individually dimmed inside chip_tokens.
+    table.add_column("langs")
+    table.add_column("launchers")
 
     ranked = sorted(
         groups.items(),
@@ -708,8 +1013,8 @@ def _dev_panel(limit: int = 5) -> Panel:
             name_cell,
             str(len(items)),
             human_bytes(total_rss),
-            langs,
-            launchers,
+            chip_tokens(langs),
+            chip_tokens(launchers),
         )
         shown_total_rss += total_rss
     title = (

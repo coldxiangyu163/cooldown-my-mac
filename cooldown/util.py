@@ -86,5 +86,44 @@ def sparkline(values: list[float], *, hi: float = 100.0, width: int | None = Non
     return "".join(out)
 
 
+def heatbar(
+    values: list[float], *, hi: float = 100.0, width: int | None = None
+) -> str:
+    """Per-cell heatmap — one block char per value, coloured by severity.
+
+    Borrows the btop visual: each value becomes one block whose height
+    encodes load and whose colour escalates from green → cyan → yellow
+    → bold red as the value approaches ``hi``. Returns Rich markup.
+
+    When ``width`` is given, the input is right-aligned and truncated
+    or padded to exactly ``width`` chars (same convention as
+    :func:`sparkline`). This makes heatbar usable for both *spatial*
+    panes (cores side-by-side now) and *temporal* panes (a single
+    value's recent history), with a single shared visual language.
+    """
+    if not values:
+        return ""
+    if width is not None:
+        values = values[-width:]
+    out: list[str] = []
+    for v in values:
+        ratio = max(0.0, min(1.0, v / hi)) if hi else 0.0
+        idx = max(1, min(8, int(round(ratio * 8)))) if v > 0 else 1
+        glyph = _SPARK_CHARS[idx]
+        if v >= 90:
+            color = "bold red"
+        elif v >= 75:
+            color = "yellow"
+        elif v >= 50:
+            color = "cyan"
+        else:
+            color = "green"
+        out.append(f"[{color}]{glyph}[/]")
+    bar = "".join(out)
+    if width is not None and len(values) < width:
+        bar = " " * (width - len(values)) + bar
+    return bar
+
+
 def now_ts() -> float:
     return time.time()
