@@ -34,10 +34,9 @@ def collect() -> ThermalStats:
     m = re.search(r"CPU_Scheduler_Limit\s*=\s*(\d+)", therm_out)
     if m and int(m.group(1)) < 100:
         cpu_power_status = f"throttled({m.group(1)}%)"
-    if re.search(r"thermal warning level.*?(\d+)", therm_out, re.I):
-        mm = re.search(r"thermal warning level.*?(\d+)", therm_out, re.I)
-        if mm and int(mm.group(1)) > 0:
-            thermal_warning = f"level{mm.group(1)}"
+    mm = re.search(r"thermal warning level.*?(\d+)", therm_out, re.I)
+    if mm and int(mm.group(1)) > 0:
+        thermal_warning = f"level{mm.group(1)}"
 
     pmset_out = _run(["pmset", "-g"])
     def _int_opt(key: str) -> int | None:

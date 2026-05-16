@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import signal
 import time
 from dataclasses import dataclass, field
@@ -68,8 +69,15 @@ class DaemonState:
                 "last_severity": self.last_severity,
                 **self.extra,
             }
-            with path.open("w", encoding="utf-8") as f:
+            # Atomic write: render to a sibling tmp file, then rename. A
+            # daemon crash mid-write previously left state.json truncated
+            # and load() would silently start fresh.
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
                 json.dump(payload, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
         except OSError:
             # State is best-effort; never let persistence kill the daemon.
             pass
