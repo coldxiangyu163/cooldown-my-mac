@@ -97,14 +97,16 @@ def apply(
 ) -> ApplyOutcome:
     """Apply the requested ``SleepPolicy`` on the given power source.
 
-    Idempotent: if ``pmset -g`` already reports the same displaysleep /
-    disksleep, we short-circuit and return ``changed=False``.
+    Idempotent: if ``pmset -g`` already reports the same displaysleep,
+    disksleep, and powernap values, we short-circuit and return
+    ``changed=False``.
     """
     flag = _SOURCE_FLAG[source]
     live = current()
     if (
         live.displaysleep == policy.displaysleep
         and live.disksleep == policy.disksleep
+        and live.powernap == policy.powernap
     ):
         record(
             "sleep_policy.noop",
@@ -120,6 +122,8 @@ def apply(
         str(policy.displaysleep),
         "disksleep",
         str(policy.disksleep),
+        "powernap",
+        str(int(policy.powernap)),
     ]
     outcome = _sudo_pmset(args, dry_run=dry_run)
     record(
@@ -148,9 +152,8 @@ def restore_defaults(*, dry_run: bool = False) -> ApplyOutcome:
         powernap=bool(_DEFAULT_POWERNAP),
     )
     outcome = apply(policy, source="ac", dry_run=dry_run)
-    # Best-effort powernap disable; surface its failure but don't block.
-    if outcome.ok and outcome.changed:
-        _sudo_pmset(["-c", "powernap", str(_DEFAULT_POWERNAP)], dry_run=dry_run)
+    # ``apply`` sets powernap together with display/disk sleep so dry-run and
+    # idempotence report the full restore plan consistently.
     record(
         "sleep_policy.restore_defaults",
         dry_run=dry_run,

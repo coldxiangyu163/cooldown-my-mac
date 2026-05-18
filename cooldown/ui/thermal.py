@@ -162,12 +162,18 @@ def run(
         return 0
 
     console.print()
+    preview = sleep_mod.restore_defaults(dry_run=True)
+    if dry_run or not preview.changed:
+        mark = "[green]✓[/]" if preview.ok else "[red]✗[/]"
+        console.print(f"{mark} {preview.message}")
+        return 0 if preview.ok else 1
+
     msg = "Restore macOS sleep defaults (displaysleep=10, disksleep=10, powernap=off) on AC?"
     if not confirm(msg, default=False, assume_yes=assume_yes):
         console.print("[dim]cancelled[/]")
         return 0
 
-    outcome = sleep_mod.restore_defaults(dry_run=dry_run)
+    outcome = sleep_mod.restore_defaults(dry_run=False)
     mark = "[green]✓[/]" if outcome.ok else "[red]✗[/]"
     console.print(f"{mark} {outcome.message}")
     if outcome.ok and outcome.changed:
