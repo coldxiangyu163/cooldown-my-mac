@@ -8,6 +8,7 @@ import pytest
 
 pytest.importorskip("textual")
 
+from cooldown.collectors.project import Project  # noqa: E402
 from cooldown.ui import watch  # noqa: E402
 
 
@@ -50,6 +51,28 @@ def test_watch_app_has_required_bindings():
     # New dashboard adds slow refresh, dry-run, kill, focus shortcuts.
     for expected in ("R", "d", "k", "K", "1", "2", "3"):
         assert expected in keys, f"missing binding: {expected!r} (have {keys})"
+
+
+def test_watch_kill_toasts_make_dry_run_explicit():
+    msg, severity = watch.kill_start_message(dry_run=True, force=False, count=1)
+    assert severity == "information"
+    assert "DRY-RUN" in msg
+    assert "no process killed" in msg
+    assert "press d for LIVE" in msg
+
+    done, done_severity = watch.kill_done_message(dry_run=True, ok=1, failed=0)
+    assert done_severity == "information"
+    assert "0 killed" in done
+
+
+def test_watch_live_kill_toasts_report_real_action():
+    msg, severity = watch.kill_start_message(dry_run=False, force=False, count=2)
+    assert msg == "SIGTERM 2 pid(s)…"
+    assert severity == "warning"
+
+    done, done_severity = watch.kill_done_message(dry_run=False, ok=1, failed=1)
+    assert done == "1 killed · 1 failed"
+    assert done_severity == "warning"
 
 
 def test_watch_app_compose_contains_healthbar_body_footer():
@@ -125,9 +148,7 @@ def test_build_project_rows_ranks_by_rss():
             pid=pid, ppid=1, lang=lang, framework=None, name=lang,
             cmdline=lang, rss=rss, cpu_percent=0.0, age=0.0,
             cwd=None,
-            project=None if project is None else type(
-                "P", (), {"name": project, "path": project}
-            )(),
+            project=None if project is None else Project(root=project, name=project, markers=[]),
             launcher=Launcher(kind="launchd", label="launchd", pid=1),
             is_orphan=orphan, user="me",
         )

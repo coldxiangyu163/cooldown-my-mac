@@ -52,7 +52,7 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from rich.console import Console
 from rich.text import Text
@@ -68,27 +68,11 @@ from ..collectors import thermal as therm_mod
 from ..collectors.procs import ProcInfo
 from ..safety.oplog import LOG_PATH
 from ..util import human_bytes, human_duration
-from .dashboard import (
-    _battery_content,
-    _cpu_content,
-    _health_score,
-    _mem_content,
-    _thermal_content,
-    battery_title_summary as _battery_title_summary,
-    chip_tokens as _chip_tokens,
-    cpu_title_summary as _cpu_title_summary,
-    idle_color as _idle_color,
-    mem_title_summary as _mem_title_summary,
-    thermal_title_summary as _thermal_title_summary,
-)
-from .dashboard import (
-    decorate_project_name as _decorate_project_name,
-)
-from .dashboard import (
-    kind_color as _kind_color,
-)
+from . import dashboard as dashboard_ui
 
 log = logging.getLogger("cooldown.watch")
+
+ToastSeverity = Literal["information", "warning", "error"]
 
 # ---------------------------------------------------------------------------
 # Data-table row helpers (pure functions — easy to unit-test)
@@ -231,6 +215,28 @@ def _last_oplog_entry(max_bytes: int = 4096) -> tuple[str, float] | None:
         return None
 
 
+
+def kill_start_message(*, dry_run: bool, force: bool, count: int) -> tuple[str, ToastSeverity]:
+    """Return the toast text/severity for a watch-table kill action."""
+    if dry_run:
+        return (
+            f"DRY-RUN {count} pid(s) — no process killed; press d for LIVE, then k",
+            "information",
+        )
+    sig = "SIGKILL" if force else "SIGTERM"
+    return f"{sig} {count} pid(s)…", "warning"
+
+
+def kill_done_message(*, dry_run: bool, ok: int, failed: int) -> tuple[str, ToastSeverity]:
+    """Return the completion toast for watch-table kill outcomes."""
+    if dry_run:
+        return (
+            f"dry-run previewed {ok} pid(s) · 0 killed"
+            + (f" · {failed} failed" if failed else ""),
+            "information" if failed == 0 else "warning",
+        )
+    return f"{ok} killed · {failed} failed", "information" if failed == 0 else "warning"
+
 # ---------------------------------------------------------------------------
 # Dense single-line header (mo status-inspired) — crams machine identity,
 # health score, key thermal metrics, and live tick cadence into one row.
@@ -280,7 +286,7 @@ def render_subtitle(
     # heavy weight on screen on the score itself, which is what the user
     # actually scans for.
     if mem and sys_stats and therm:
-        score, color = _health_score(mem, sys_stats, therm, battery)
+        score, color = dashboard_ui._health_score(mem, sys_stats, therm, battery)
         # Pill + dim "Health" label: pill carries the value, label tells
         # a first-time reader what the value means.
         chunks.append(
@@ -789,8 +795,8 @@ def _build_app_class():
             self._updated["cpu"] = time.time()
             self._cpu_hist.append(sys_stats.cpu_percent)
             cpu_w = self.query_one("#cpu", Static)
-            cpu_w.update(_cpu_content(sys_stats, history=list(self._cpu_hist)))
-            cpu_w.border_title = _cpu_title_summary(sys_stats)
+            cpu_w.update(dashboard_ui._cpu_content(sys_stats, history=list(self._cpu_hist)))
+            cpu_w.border_title = dashboard_ui.cpu_title_summary(sys_stats)
             self._refresh_subtitle()
 
         def _apply_mem(self, mem: mem_mod.MemoryStats) -> None:
@@ -798,24 +804,24 @@ def _build_app_class():
             self._updated["mem"] = time.time()
             self._mem_hist.append(mem.used_percent)
             mem_w = self.query_one("#mem", Static)
-            mem_w.update(_mem_content(mem, history=list(self._mem_hist)))
-            mem_w.border_title = _mem_title_summary(mem)
+            mem_w.update(dashboard_ui._mem_content(mem, history=list(self._mem_hist)))
+            mem_w.border_title = dashboard_ui.mem_title_summary(mem)
             self._refresh_subtitle()
 
         def _apply_thermal(self, therm: therm_mod.ThermalStats) -> None:
             self._therm = therm
             self._updated["thermal"] = time.time()
             therm_w = self.query_one("#thermal", Static)
-            therm_w.update(_thermal_content(therm))
-            therm_w.border_title = _thermal_title_summary(therm)
+            therm_w.update(dashboard_ui._thermal_content(therm))
+            therm_w.border_title = dashboard_ui.thermal_title_summary(therm)
             self._refresh_subtitle()
 
         def _apply_battery(self, batt: batt_mod.BatteryStats | None) -> None:
             self._batt = batt
             self._updated["battery"] = time.time()
             batt_w = self.query_one("#battery", Static)
-            batt_w.update(_battery_content(batt))
-            batt_w.border_title = _battery_title_summary(batt)
+            batt_w.update(dashboard_ui._battery_content(batt))
+            batt_w.border_title = dashboard_ui.battery_title_summary(batt)
             self._refresh_subtitle()
 
         def _apply_ai(self, procs: list[ProcInfo], rows: list[AiRow]) -> None:
@@ -846,8 +852,8 @@ def _build_app_class():
                 return Text.from_markup(value, justify="right")
 
             for row in rows:
-                color = _kind_color(row.kind)
-                idle_clr = _idle_color(row.idle)
+                color = dashboard_ui.kind_color(row.kind)
+                idle_clr = dashboard_ui.idle_color(row.idle)
                 # Colour lives on the dot only — letting the family
                 # glyph carry identification and keeping the kind name
                 # at neutral bold makes a row of 6+ kinds read calm
@@ -890,12 +896,12 @@ def _build_app_class():
                 t.border_subtitle = "[dim]empty[/]"
                 return
             for row in rows:
-                name_cell = _decorate_project_name(row.name, orphan=row.orphan)
+                name_cell = dashboard_ui.decorate_project_name(row.name, orphan=row.orphan)
                 t.add_row(
                     name_cell,
                     Text(str(row.count), justify="right"),
                     Text(human_bytes(row.rss), justify="right"),
-                    _chip_tokens(row.launchers),
+                    dashboard_ui.chip_tokens(row.launchers),
                 )
             total_rss = sum(r.rss for r in rows)
             t.border_title = (
@@ -928,7 +934,7 @@ def _build_app_class():
                     Text(str(row.pid), justify="right"),
                     row.process,
                     row.project,
-                    _chip_tokens(row.launcher),
+                    dashboard_ui.chip_tokens(row.launcher),
                 )
             t.border_title = f"Listening Ports  [dim]· {len(rows)} shown[/]"
             t.border_subtitle = "[dim]k to kill pid[/]"
@@ -1073,17 +1079,14 @@ def _build_app_class():
                 self.notify("no killable pids on this row", severity="warning", timeout=1.5)
                 return
 
-            sig = "SIGKILL" if force else "SIGTERM"
-            mode = "DRY-RUN" if self.dry_run else sig
-            self.notify(
-                f"{mode} {len(targets)} pid(s)…",
-                severity="warning" if not self.dry_run else "information",
-                timeout=2.0,
-            )
+            dry_run = self.dry_run
+            msg, severity = kill_start_message(dry_run=dry_run, force=force, count=len(targets))
+            self.notify(msg, severity=severity, timeout=3.0 if dry_run else 2.0)
             # Run the kill in a background thread so the UI doesn't block
-            # on `psutil.wait(timeout=3)`.
+            # on `psutil.wait(timeout=3)`. Capture dry_run now so toggling
+            # `d` after pressing `k` cannot change an already-started action.
             self.run_worker(
-                lambda: self._do_kill(targets, force=force),
+                lambda: self._do_kill(targets, force=force, dry_run=dry_run),
                 thread=True,
                 exclusive=False,
                 group="cooldown-kill",
@@ -1107,10 +1110,10 @@ def _build_app_class():
                 return [_synth_procinfo(row.pid, "port", f":{row.port}")]
             return []
 
-        def _do_kill(self, targets: list[ProcInfo], *, force: bool) -> None:
+        def _do_kill(self, targets: list[ProcInfo], *, force: bool, dry_run: bool) -> None:
             from ..actions.reap import terminate  # noqa: PLC0415
             try:
-                outcomes = terminate(targets, dry_run=self.dry_run, force=force)
+                outcomes = terminate(targets, dry_run=dry_run, force=force)
             except Exception as exc:  # noqa: BLE001
                 self.call_from_thread(
                     self.notify,
@@ -1121,12 +1124,12 @@ def _build_app_class():
                 return
             ok = sum(1 for o in outcomes if o.ok)
             failed = len(outcomes) - ok
-            msg = f"{ok} ok · {failed} failed"
+            msg, severity = kill_done_message(dry_run=dry_run, ok=ok, failed=failed)
             self.call_from_thread(
                 self.notify,
                 msg,
-                severity="information" if failed == 0 else "warning",
-                timeout=3.0,
+                severity=severity,
+                timeout=4.0 if dry_run else 3.0,
             )
             # Immediately refresh fast + (if we killed from projects/ports)
             # slow so the user sees their row disappear.
