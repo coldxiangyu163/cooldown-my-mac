@@ -544,15 +544,6 @@ def _mem_panel(mem: mem_mod.MemoryStats) -> Panel:
     )
 
 
-def _pressure_badge(level: str) -> str:
-    mapping = {
-        "normal": "[green]normal[/]",
-        "warn": "[yellow]warn[/]",
-        "critical": "[bold red]critical[/]",
-    }
-    return mapping.get(level, "[dim]unknown[/]")
-
-
 def thermal_content(t: therm_mod.ThermalStats) -> Table:
     """Thermal / power summary, clustered into three semantic rows.
 

@@ -47,7 +47,6 @@ ZombieProcess, etc.) never takes down the whole TUI.
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import time
 from collections import deque
@@ -66,7 +65,6 @@ from ..collectors import procs as procs_mod
 from ..collectors import system as sys_mod
 from ..collectors import thermal as therm_mod
 from ..collectors.procs import ProcInfo
-from ..safety.oplog import LOG_PATH
 from ..util import human_bytes, human_duration
 from . import dashboard as dashboard_ui
 
@@ -174,47 +172,6 @@ def build_port_rows(
     return out
 
 
-# ---------------------------------------------------------------------------
-# Oplog "last action" tail (cheap — reads last non-empty line)
-# ---------------------------------------------------------------------------
-
-def _last_oplog_entry(max_bytes: int = 4096) -> tuple[str, float] | None:
-    """Return (action_str, epoch_seconds) for the most recent oplog line.
-
-    Reads only the trailing ``max_bytes`` so the call is O(1) regardless of
-    log size. Returns ``None`` on any failure.
-    """
-    try:
-        if not LOG_PATH.exists():
-            return None
-        size = LOG_PATH.stat().st_size
-        with LOG_PATH.open("rb") as f:
-            f.seek(max(0, size - max_bytes))
-            chunk = f.read().decode("utf-8", errors="replace")
-        last = None
-        for line in chunk.splitlines():
-            line = line.strip()
-            if line:
-                last = line
-        if not last:
-            return None
-        obj = json.loads(last)
-        ts_s = obj.get("ts") or ""
-        action = obj.get("action") or "?"
-        # Parse isoformat (with seconds precision).
-        if ts_s:
-            import datetime as _dt  # noqa: PLC0415
-            try:
-                ts = _dt.datetime.fromisoformat(ts_s).timestamp()
-            except ValueError:
-                ts = time.time()
-        else:
-            ts = time.time()
-        return action, ts
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def kill_start_message(*, dry_run: bool, force: bool, count: int) -> tuple[str, ToastSeverity]:
     """Return the toast text/severity for a watch-table kill action."""
     if dry_run:
@@ -247,9 +204,6 @@ def render_subtitle(
     sys_stats: sys_mod.SystemStats | None,
     therm: therm_mod.ThermalStats | None,
     procs: list[ProcInfo] | None,
-    last_op: tuple[str, float] | None,
-    fast_interval: int,
-    slow_interval: int,
     paused: bool,
     dry_run: bool,
     host: host_mod.HostInfo | None = None,
@@ -325,9 +279,6 @@ def render_subtitle(
         # when there is nothing to react to.
     if procs is not None:
         signals.append(f"[dim]CLIs[/] [cyan]{len(procs)}[/]")
-    # last_op intentionally NOT surfaced here — it was debug/meta
-    # noise that pushed the bar density up. The oplog is still
-    # written and `cool log` can show it for forensics.
     if signals:
         chunks.append("  ".join(signals))
 
@@ -969,9 +920,6 @@ def _build_app_class():
                 sys_stats=self._sys,
                 therm=self._therm,
                 procs=self._procs,
-                last_op=_last_oplog_entry(),
-                fast_interval=self.fast_interval,
-                slow_interval=self.slow_interval,
                 paused=self.paused,
                 dry_run=self.dry_run,
                 host=self._host,

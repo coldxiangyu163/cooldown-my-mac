@@ -196,7 +196,6 @@ def test_render_subtitle_includes_all_bits():
     )
     sub = watch.render_subtitle(
         mem=mem, sys_stats=None, therm=None, procs=[],
-        last_op=None, fast_interval=3, slow_interval=15,
         paused=False, dry_run=True,
     )
     assert "pressure" in sub
@@ -230,7 +229,6 @@ def test_render_subtitle_embeds_host_and_battery_when_provided():
     )
     sub = watch.render_subtitle(
         mem=None, sys_stats=None, therm=None, procs=None,
-        last_op=None, fast_interval=3, slow_interval=15,
         paused=False, dry_run=False,
         host=host, battery=batt,
     )
@@ -255,37 +253,13 @@ def test_render_subtitle_embeds_host_and_battery_when_provided():
 
 
 # ---------------------------------------------------------------------------
-# Oplog tail (pure IO test)
-# ---------------------------------------------------------------------------
-
-def test_last_oplog_entry_reads_trailing_line(tmp_path, monkeypatch):
-    log = tmp_path / "operations.log"
-    log.write_text(
-        '{"ts": "2026-04-19T10:00:00", "action": "reap.dry-run", "pid": 1}\n'
-        '{"ts": "2026-04-19T10:05:00", "action": "reap.kill", "pid": 2}\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(watch, "LOG_PATH", log)
-    result = watch._last_oplog_entry()
-    assert result is not None
-    action, ts = result
-    assert action == "reap.kill"
-    assert ts > 0
-
-
-def test_last_oplog_entry_returns_none_when_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(watch, "LOG_PATH", tmp_path / "nonexistent.log")
-    assert watch._last_oplog_entry() is None
-
-
-# ---------------------------------------------------------------------------
 # End-to-end: mount the app headlessly and push one fake tick through each
 # apply handler. This catches layout / CSS / widget-id regressions that the
 # pure-logic tests above miss.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_watch_app_end_to_end_mount_and_apply(monkeypatch):
+async def test_watch_app_end_to_end_mount_and_apply():
     from cooldown.collectors.memory import MemoryStats
     from cooldown.collectors.procs import ProcInfo
     from cooldown.collectors.system import SystemStats
@@ -294,8 +268,6 @@ async def test_watch_app_end_to_end_mount_and_apply(monkeypatch):
     app_cls = watch._build_app_class()
     app = app_cls(fast_interval=999, slow_interval=999)
 
-    # No oplog -> subtitle still renders cleanly.
-    monkeypatch.setattr(watch, "_last_oplog_entry", lambda: None)
     # Suppress the on_mount bootstrap workers so the test's explicit
     # _apply_ports / _apply_projects synthetic data isn't overwritten by
     # the real-machine port scan that the slow tick would otherwise run.
