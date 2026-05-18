@@ -93,9 +93,8 @@ pipx inject cooldown-my-mac textual   # 可选：启用 cool watch 全屏 TUI
 ```bash
 git clone https://github.com/coldxiangyu163/cooldown-my-mac.git
 cd cooldown-my-mac
-python3 -m venv .venv
-.venv/bin/pip install -e ".[watch,dev]"
-echo "alias cool='$(pwd)/.venv/bin/cool'" >> ~/.zshrc && source ~/.zshrc
+uv sync --extra watch --extra dev
+uv run cool status
 ```
 
 </details>
@@ -186,7 +185,7 @@ cool apps resume --kind wechat -y                     # SIGCONT 恢复
 
 **温度 / launchd / 守护 `cool thermal` · `cool launchd` · `cool daemon`**
 ```bash
-cool thermal --restore            # 恢复 displaysleep / disksleep / 允许睡眠
+cool thermal --restore            # 恢复 displaysleep / disksleep / powernap 默认值
 cool launchd --audit --disable    # 列第三方 agent + 交互式 bootout（Apple 拒禁）
 cool daemon install               # 注册 24/7 守护到 ~/Library/LaunchAgents/
 ```
