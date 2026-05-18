@@ -54,7 +54,7 @@ def test_watch_app_has_required_bindings():
 
 
 def test_watch_kill_toasts_make_dry_run_explicit():
-    msg, severity = watch.kill_start_message(dry_run=True, force=False, count=1)
+    msg, severity = watch.kill_start_message(dry_run=True, force=False, pids=1)
     assert severity == "information"
     assert "DRY-RUN" in msg
     assert "no process killed" in msg
@@ -66,13 +66,28 @@ def test_watch_kill_toasts_make_dry_run_explicit():
 
 
 def test_watch_live_kill_toasts_report_real_action():
-    msg, severity = watch.kill_start_message(dry_run=False, force=False, count=2)
+    msg, severity = watch.kill_start_message(dry_run=False, force=False, pids=2)
     assert msg == "SIGTERM 2 pid(s)…"
     assert severity == "warning"
 
     done, done_severity = watch.kill_done_message(dry_run=False, ok=1, failed=1)
     assert done == "1 killed · 1 failed"
     assert done_severity == "warning"
+
+
+def test_watch_kill_toast_surfaces_worker_breakdown():
+    """When a folded reloader row signals more PIDs than rows selected,
+    the toast must spell out the breakdown so the count isn't a
+    surprise to the user."""
+    dry, _ = watch.kill_start_message(
+        dry_run=True, force=False, pids=2, workers=1
+    )
+    assert "DRY-RUN 2 pid(s) (1 + 1 worker)" in dry
+
+    live, _ = watch.kill_start_message(
+        dry_run=False, force=True, pids=3, workers=2
+    )
+    assert live == "SIGKILL 3 pid(s) (1 + 2 workers)…"
 
 
 def test_watch_app_compose_contains_healthbar_body_footer():
@@ -183,6 +198,21 @@ def test_build_port_rows_dedup_ipv4_ipv6_twins():
     assert len(rows) == 2
     ports_ = sorted(r.port for r in rows)
     assert ports_ == [3306, 5432]
+
+
+def test_build_port_rows_carries_workers_through():
+    """The ``workers_by_pid`` map must reach the rendered ``PortRow``
+    so the table can display the ``+N worker`` chip."""
+    from cooldown.collectors.ports import PortEntry
+
+    parent = PortEntry(port=8000, proto="tcp4", bind="*", pid=19873,
+                       process="python3.13", user="me")
+    rows = watch.build_port_rows(
+        [parent], {}, {}, workers_by_pid={19873: [31043]}
+    )
+    assert len(rows) == 1
+    assert rows[0].pid == 19873
+    assert rows[0].workers == [31043]
 
 
 def test_render_subtitle_includes_all_bits():

@@ -99,6 +99,21 @@ def _launcher_for(pid: int) -> str:
     return str(res)
 
 
+def _ancestors_for(pids: set[int]) -> dict[int, set[int]]:
+    """Walk each pid's ancestor chain once. Empty set when ancestry is
+    unavailable so :func:`ports_mod.collapse_inherited` becomes a no-op
+    instead of crashing the CLI."""
+    if _ancestry_mod is None:
+        return {pid: set() for pid in pids}
+    out: dict[int, set[int]] = {}
+    for pid in pids:
+        try:
+            out[pid] = {a.pid for a in _ancestry_mod.walk(pid)}
+        except Exception:  # noqa: BLE001
+            out[pid] = set()
+    return out
+
+
 def _project_for(pid: int) -> tuple[str, str]:
     """Return (project_name, project_path) or ("-", "") on lookup failure."""
     if _project_mod is None:
@@ -125,6 +140,7 @@ def _print_table(
     entries: list[ports_mod.PortEntry],
     launchers: dict[int, str],
     projects: dict[int, tuple[str, str]],
+    workers: dict[int, list[int]],
     title: str,
 ) -> None:
     if not entries:
@@ -143,11 +159,21 @@ def _print_table(
         hint = ports_mod.by_project_hint(e.port)
         proj_name, _ = projects.get(e.pid, ("-", ""))
         proj_label = f"[dim]{hint}[/]" if (proj_name == "-" and hint) else proj_name
+        # Surface inherited reloader workers inline so the collapsed row
+        # still hints at the hidden PIDs (matches `cool watch`).
+        worker_pids = workers.get(e.pid, [])
+        process_cell = e.process or "-"
+        if worker_pids:
+            n = len(worker_pids)
+            process_cell = (
+                f"{process_cell}  [dim]+{n} worker"
+                f"{'s' if n != 1 else ''}[/]"
+            )
         table.add_row(
             str(e.port),
             f"{e.proto}/{e.bind}",
             str(e.pid),
-            e.process or "-",
+            process_cell,
             proj_label,
             launchers.get(e.pid, "-"),
             _truncate(e.command, 60),
@@ -187,7 +213,12 @@ def _collect_and_filter(
     project_filter: str | None,
     conflict: bool,
     show_all: bool,
-) -> tuple[list[ports_mod.PortEntry], dict[int, str], dict[int, tuple[str, str]]]:
+) -> tuple[
+    list[ports_mod.PortEntry],
+    dict[int, str],
+    dict[int, tuple[str, str]],
+    dict[int, list[int]],
+]:
     entries = ports_mod.collect()
     ports_mod.enrich_command(entries)
 
@@ -205,6 +236,12 @@ def _collect_and_filter(
     if not show_all:
         entries = [e for e in entries if not _is_apple_noise(e.process)]
 
+    # Fold parent/child reloader rows that share one listening fd before
+    # downstream filters so --conflict only flags genuinely distinct
+    # binders (not a uvicorn parent + its reloader worker).
+    ancestors = _ancestors_for({e.pid for e in entries})
+    entries, workers = ports_mod.collapse_inherited(entries, ancestors)
+
     # Resolve optional metadata once per pid.
     unique_pids = {e.pid for e in entries}
     launchers = {pid: _launcher_for(pid) for pid in unique_pids}
@@ -219,6 +256,7 @@ def _collect_and_filter(
             if name != "-" and needle in name.lower()
         }
         entries = [e for e in entries if e.pid in keep_pids]
+        workers = {pid: kids for pid, kids in workers.items() if pid in keep_pids}
 
     # Conflict filter is applied last so it composes with the others.
     if conflict:
@@ -226,7 +264,7 @@ def _collect_and_filter(
         entries = [e for e in entries if e.port in conflict_ports]
 
     entries.sort(key=lambda e: (e.port, e.pid, e.bind))
-    return entries, launchers, projects
+    return entries, launchers, projects, workers
 
 
 def _print_free(
@@ -296,7 +334,7 @@ def run(
                 return 0
             return _print_free(console, raw, free)
 
-        entries, launchers, projects = _collect_and_filter(
+        entries, launchers, projects, workers = _collect_and_filter(
             port=port,
             range_=range_,
             project_filter=project_filter,
@@ -310,6 +348,10 @@ def run(
                 **asdict(e),
                 "launcher": launchers.get(e.pid, "-"),
                 "project": projects.get(e.pid, ("-", ""))[0],
+                # Inherited reloader workers folded into this row. Empty
+                # list when the entry stands alone — kept stable so
+                # scripts can assume the key exists.
+                "workers": sorted(workers.get(e.pid, [])),
             }
             for e in entries
         ]
@@ -324,7 +366,7 @@ def run(
     elif range_:
         title = f"listening ports — {range_}"
 
-    _print_table(console, entries, launchers, projects, title)
+    _print_table(console, entries, launchers, projects, workers, title)
 
     if not kill or not entries:
         return 0
@@ -358,16 +400,48 @@ def run(
         console.print("[dim]nothing selected.[/]")
         return 0
 
+    # Expand each picked row with its inherited workers so the listener
+    # actually goes away — relying on the parent's process group to
+    # cascade SIGTERM isn't reliable across every reloader implementation.
+    targets: list[ProcInfo] = []
+    target_pids: set[int] = set()
+    extra_workers = 0
+    for e in picks:
+        if e.pid not in target_pids:
+            targets.append(_to_procinfo(e))
+            target_pids.add(e.pid)
+        for worker_pid in workers.get(e.pid, []):
+            if worker_pid in target_pids:
+                continue
+            targets.append(
+                ProcInfo(
+                    pid=worker_pid,
+                    ppid=e.pid,
+                    kind="port",
+                    name=e.process,
+                    cmdline=e.command,
+                    rss=0,
+                    cpu_percent=0.0,
+                    create_time=0.0,
+                    age=0.0,
+                    tty=None,
+                    user=e.user,
+                )
+            )
+            target_pids.add(worker_pid)
+            extra_workers += 1
+
     action = "DRY-RUN terminate" if dry_run else ("SIGKILL" if force else "SIGTERM")
+    extra = f" (+{extra_workers} worker{'s' if extra_workers != 1 else ''})" if extra_workers else ""
     if not confirm(
-        f"{action} {len(picks)} process(es) holding listening ports?",
+        f"{action} {len(targets)} process(es){extra} holding listening ports?",
         default=False,
         assume_yes=assume_yes,
     ):
         console.print("[dim]cancelled[/]")
         return 0
 
-    outcomes = terminate([_to_procinfo(e) for e in picks], dry_run=dry_run, force=force)
+    outcomes = terminate(targets, dry_run=dry_run, force=force)
     ok = sum(1 for o in outcomes if o.ok)
     fail = len(outcomes) - ok
     for o in outcomes:

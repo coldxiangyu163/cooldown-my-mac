@@ -50,7 +50,7 @@ import contextlib
 import logging
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from rich.console import Console
@@ -105,6 +105,9 @@ class PortRow:
     process: str
     project: str
     launcher: str
+    # PIDs that share this listening socket via fork inheritance (e.g.
+    # uvicorn --reload's reloader worker). Empty for ordinary listeners.
+    workers: list[int] = field(default_factory=list)
 
 
 def build_ai_rows(procs: list[ProcInfo], limit: int = 20) -> list[AiRow]:
@@ -148,6 +151,7 @@ def build_port_rows(
     launchers: dict[int, str],
     projects: dict[int, str],
     limit: int = 20,
+    workers_by_pid: dict[int, list[int]] | None = None,
 ) -> list[PortRow]:
     # Dedup per (port, pid) so tcp4/tcp6 twin rows don't both appear.
     seen: set[tuple[int, int]] = set()
@@ -165,6 +169,7 @@ def build_port_rows(
                 process=e.process,
                 project=projects.get(e.pid, "-") or "-",
                 launcher=launchers.get(e.pid, "-") or "-",
+                workers=sorted((workers_by_pid or {}).get(e.pid, [])),
             )
         )
         if len(out) >= limit:
@@ -172,15 +177,32 @@ def build_port_rows(
     return out
 
 
-def kill_start_message(*, dry_run: bool, force: bool, count: int) -> tuple[str, ToastSeverity]:
-    """Return the toast text/severity for a watch-table kill action."""
+def kill_start_message(
+    *,
+    dry_run: bool,
+    force: bool,
+    pids: int,
+    workers: int = 0,
+) -> tuple[str, ToastSeverity]:
+    """Return the toast text/severity for a watch-table kill action.
+
+    ``workers`` counts PIDs that were folded into the user-visible row
+    via ``collapse_inherited`` (uvicorn reloader children, etc.). When
+    >0 the toast appends ``(N + M worker)`` so the gap between "one row
+    selected" and "more than one signal" is explicit.
+    """
+    extra = (
+        f" ({pids - workers} + {workers} worker{'s' if workers != 1 else ''})"
+        if workers
+        else ""
+    )
     if dry_run:
         return (
-            f"DRY-RUN {count} pid(s) — no process killed; press d for LIVE, then k",
+            f"DRY-RUN {pids} pid(s){extra} — no process killed; press d for LIVE, then k",
             "information",
         )
     sig = "SIGKILL" if force else "SIGTERM"
-    return f"{sig} {count} pid(s)…", "warning"
+    return f"{sig} {pids} pid(s){extra}…", "warning"
 
 
 def kill_done_message(*, dry_run: bool, ok: int, failed: int) -> tuple[str, ToastSeverity]:
@@ -330,21 +352,33 @@ def render_subtitle(
 #     subprocesses sharing the same project root only stat the marker set
 #     once.
 
-def _attribute_ports(pids: set[int]) -> tuple[dict[int, str], dict[int, str]]:
-    """Return (launchers, projects) keyed by pid for the supplied set.
+def _attribute_ports(
+    pids: set[int],
+) -> tuple[dict[int, str], dict[int, str], dict[int, set[int]]]:
+    """Return (launchers, projects, ancestors) keyed by pid for the set.
 
-    Errors per pid degrade silently to ``"-"`` so a single PROC_ERRORS
-    blip never wipes out the table.
+    ``ancestors[pid]`` is the set of pids in ``pid``'s ancestor chain
+    (excluding ``pid`` itself). The watch UI uses it to detect
+    parent/child reloader pairs that share one listening socket, so
+    those don't display as duplicate rows.
+
+    Errors per pid degrade silently to ``"-"`` / empty set so a single
+    PROC_ERRORS blip never wipes out the table.
     """
     try:
         from ..collectors import ancestry as ancestry_mod  # noqa: PLC0415
         from ..collectors import project as project_mod  # noqa: PLC0415
     except Exception:  # noqa: BLE001
         log.exception("watch: ancestry/project import failed")
-        return {pid: "-" for pid in pids}, {pid: "-" for pid in pids}
+        return (
+            {pid: "-" for pid in pids},
+            {pid: "-" for pid in pids},
+            {pid: set() for pid in pids},
+        )
 
     launchers: dict[int, str] = {}
     projects: dict[int, str] = {}
+    ancestors: dict[int, set[int]] = {}
 
     _classify_cache: dict[int, Any] = {}
 
@@ -380,9 +414,10 @@ def _attribute_ports(pids: set[int]) -> tuple[dict[int, str], dict[int, str]]:
 
     for pid in pids:
         try:
-            ancestors = ancestry_mod.walk(pid)
+            anc_procs = ancestry_mod.walk(pid)
+            ancestors[pid] = {a.pid for a in anc_procs}
             launcher_label = "-"
-            for anc in ancestors:
+            for anc in anc_procs:
                 guess = _classify(anc)
                 if guess is None or guess.kind == "shell":
                     continue
@@ -391,9 +426,10 @@ def _attribute_ports(pids: set[int]) -> tuple[dict[int, str], dict[int, str]]:
             launchers[pid] = launcher_label
         except Exception:  # noqa: BLE001
             launchers[pid] = "-"
+            ancestors[pid] = set()
         projects[pid] = _project_for(pid)
 
-    return launchers, projects
+    return launchers, projects, ancestors
 
 
 # ---------------------------------------------------------------------------
@@ -732,8 +768,18 @@ def _build_app_class():
                 self.call_from_thread(self._set_table_error, "projects", exc)
             try:
                 entries = ports_mod.collect()
-                launchers, projects = _attribute_ports({e.pid for e in entries})
-                rows = build_port_rows(entries, launchers, projects)
+                launchers, projects, ancestors = _attribute_ports(
+                    {e.pid for e in entries}
+                )
+                # Fold child reloaders that share a parent's listening fd
+                # before building rows so the table reflects the actual
+                # number of distinct listeners, not the per-fd lsof view.
+                entries, workers_by_pid = ports_mod.collapse_inherited(
+                    entries, ancestors
+                )
+                rows = build_port_rows(
+                    entries, launchers, projects, workers_by_pid=workers_by_pid
+                )
                 self.call_from_thread(self._apply_ports, rows)
             except Exception as exc:  # noqa: BLE001
                 log.exception("watch slow-tick: ports panel failed")
@@ -878,11 +924,22 @@ def _build_app_class():
                 t.border_subtitle = "[dim]empty[/]"
                 return
             for row in rows:
+                # When a reloader child inherits the parent's socket
+                # we collapsed it into one row — surface the hidden
+                # worker PIDs inline so users still know they're there.
+                if row.workers:
+                    n = len(row.workers)
+                    process_cell = (
+                        f"{row.process}  [dim]+{n} worker"
+                        f"{'s' if n != 1 else ''}[/]"
+                    )
+                else:
+                    process_cell = row.process
                 t.add_row(
                     Text(str(row.port), justify="right"),
                     row.proto,
                     Text(str(row.pid), justify="right"),
-                    row.process,
+                    process_cell,
                     row.project,
                     dashboard_ui.chip_tokens(row.launcher),
                 )
@@ -1027,7 +1084,21 @@ def _build_app_class():
                 return
 
             dry_run = self.dry_run
-            msg, severity = kill_start_message(dry_run=dry_run, force=force, count=len(targets))
+            # Derive the inherited-worker count from the focused port row
+            # so the toast can spell out "1 row + N worker" instead of
+            # quietly reporting a higher pid count than the user picked.
+            worker_count = 0
+            if (
+                table_id == "ports"
+                and 0 <= row_idx < len(self._port_rows)
+            ):
+                worker_count = len(self._port_rows[row_idx].workers)
+            msg, severity = kill_start_message(
+                dry_run=dry_run,
+                force=force,
+                pids=len(targets),
+                workers=worker_count,
+            )
             self.notify(msg, severity=severity, timeout=3.0 if dry_run else 2.0)
             # Run the kill in a background thread so the UI doesn't block
             # on `psutil.wait(timeout=3)`. Capture dry_run now so toggling
@@ -1054,7 +1125,16 @@ def _build_app_class():
                 return [_synth_procinfo(pid, "dev", row.name) for pid in row.pids]
             elif table_id == "ports" and 0 <= row_idx < len(self._port_rows):
                 row = self._port_rows[row_idx]
-                return [_synth_procinfo(row.pid, "port", f":{row.port}")]
+                # Inherited workers share the parent's socket fd; if the
+                # row was collapsed (workers populated) we signal every
+                # PID so the listener actually goes away even when the
+                # parent's process group doesn't cascade cleanly.
+                targets = [_synth_procinfo(row.pid, "port", f":{row.port}")]
+                for worker_pid in row.workers:
+                    targets.append(
+                        _synth_procinfo(worker_pid, "port", f":{row.port}")
+                    )
+                return targets
             return []
 
         def _do_kill(self, targets: list[ProcInfo], *, force: bool, dry_run: bool) -> None:
