@@ -42,8 +42,12 @@ def test_classify_tmux():
 
 
 def test_classify_cmux_zellij():
-    assert classify_ancestor(_fake_proc(name="cmux", cmdline=["cmux"])).kind == "cmux"
-    assert classify_ancestor(_fake_proc(name="zellij", cmdline=["zellij"])).kind == "zellij"
+    cmux = classify_ancestor(_fake_proc(name="cmux", cmdline=["cmux"]))
+    zellij = classify_ancestor(_fake_proc(name="zellij", cmdline=["zellij"]))
+    assert cmux is not None
+    assert zellij is not None
+    assert cmux.kind == "cmux"
+    assert zellij.kind == "zellij"
 
 
 @pytest.mark.parametrize(

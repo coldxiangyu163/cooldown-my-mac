@@ -18,7 +18,7 @@ from ..collectors import memory as mem_mod
 from ..collectors import procs as procs_mod
 from ..collectors import system as sys_mod
 from ..collectors import thermal as therm_mod
-from ..util import bar, heatbar, human_bytes, human_duration, sparkline
+from ..util import bar, heatbar, human_bytes, human_duration
 
 # ---------------------------------------------------------------------------
 # Severity colour policy (keep in lock-step across all panels)
@@ -82,11 +82,11 @@ def thermal_title_summary(t: therm_mod.ThermalStats) -> str:
     if t.thermal_warning and t.thermal_warning != "none":
         return f"Thermal  [dim]·[/] [bold red]▲ {t.thermal_warning}[/]"
     if "throttled" in (t.cpu_power_status or "").lower():
-        return f"Thermal  [dim]·[/] [bold red]▲ throttled[/]"
+        return "Thermal  [dim]·[/] [bold red]▲ throttled[/]"
     if t.sleep_prevented:
-        return f"Thermal  [dim]·[/] [bold red]▲ sleep blocked[/]"
+        return "Thermal  [dim]·[/] [bold red]▲ sleep blocked[/]"
     if t.low_power_mode:
-        return f"Thermal  [dim]·[/] [yellow]◆ low-power[/]"
+        return "Thermal  [dim]·[/] [yellow]◆ low-power[/]"
     return "Thermal  [dim]·[/] [green]● ok[/]"
 
 
@@ -471,13 +471,13 @@ def _memory_composition(mem: mem_mod.MemoryStats, *, width: int = 24) -> tuple[s
         floors[i] += 1
 
     bar_parts: list[str] = []
-    for (_, color), n in zip(_MEM_SEGMENTS, floors):
+    for (_, color), n in zip(_MEM_SEGMENTS, floors, strict=True):
         if n > 0:
             bar_parts.append(f"[{color}]{'█' * n}[/]")
     bar_str = "".join(bar_parts) or f"[dim]{'░' * width}[/]"
 
     legend_parts: list[str] = []
-    for (name, color), n in zip(_MEM_SEGMENTS, floors):
+    for (name, color), n in zip(_MEM_SEGMENTS, floors, strict=True):
         # Hide segments that rounded to zero blocks — surfacing a "0B"
         # swatch in the legend just adds noise when there's nothing to
         # see in the bar itself.
@@ -498,8 +498,6 @@ def _mem_content(
     *,
     history: list[float] | None = None,
 ) -> Table:
-    used_pct = mem.used_percent
-    color = _pct_color(used_pct)
     swap_pct = (mem.swap_used / mem.swap_total * 100.0) if mem.swap_total else 0.0
     swap_color = _pct_color(swap_pct)
 
@@ -618,10 +616,7 @@ def _thermal_content(t: therm_mod.ThermalStats) -> Table:
             return "never"
         return f"{minutes}m"
 
-    if t.sleep_prevented:
-        sleep_lead = _chip(*CRIT, "prevented")
-    else:
-        sleep_lead = _chip(*OK, "allowed")
+    sleep_lead = _chip(*CRIT, "prevented") if t.sleep_prevented else _chip(*OK, "allowed")
     sleep_detail = (
         f"[dim]display {_sleep_label(t.display_sleep)} · "
         f"disk {_sleep_label(t.disk_sleep)}[/]"

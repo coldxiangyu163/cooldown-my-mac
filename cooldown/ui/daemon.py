@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from rich.box import SIMPLE
 from rich.console import Console
@@ -84,7 +84,7 @@ def run(
         lx = st["last_exit_status"]
         table.add_row("last exit", str(lx) if lx is not None else "-")
         console.print(table)
-        log_tail = st.get("log_tail") or []
+        log_tail = cast("list[str]", st.get("log_tail") or [])
         if log_tail:
             console.print("[bold]recent log:[/]")
             for line in log_tail:
