@@ -45,3 +45,8 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# local agent/runtime state
+.omx/
+.claude/
+CLAUDE.md
