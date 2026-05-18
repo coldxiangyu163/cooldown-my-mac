@@ -215,7 +215,6 @@ def _last_oplog_entry(max_bytes: int = 4096) -> tuple[str, float] | None:
         return None
 
 
-
 def kill_start_message(*, dry_run: bool, force: bool, count: int) -> tuple[str, ToastSeverity]:
     """Return the toast text/severity for a watch-table kill action."""
     if dry_run:
@@ -286,7 +285,7 @@ def render_subtitle(
     # heavy weight on screen on the score itself, which is what the user
     # actually scans for.
     if mem and sys_stats and therm:
-        score, color = dashboard_ui._health_score(mem, sys_stats, therm, battery)
+        score, color = dashboard_ui.health_score(mem, sys_stats, therm, battery)
         # Pill + dim "Health" label: pill carries the value, label tells
         # a first-time reader what the value means.
         chunks.append(
@@ -795,7 +794,7 @@ def _build_app_class():
             self._updated["cpu"] = time.time()
             self._cpu_hist.append(sys_stats.cpu_percent)
             cpu_w = self.query_one("#cpu", Static)
-            cpu_w.update(dashboard_ui._cpu_content(sys_stats, history=list(self._cpu_hist)))
+            cpu_w.update(dashboard_ui.cpu_content(sys_stats, history=list(self._cpu_hist)))
             cpu_w.border_title = dashboard_ui.cpu_title_summary(sys_stats)
             self._refresh_subtitle()
 
@@ -804,7 +803,7 @@ def _build_app_class():
             self._updated["mem"] = time.time()
             self._mem_hist.append(mem.used_percent)
             mem_w = self.query_one("#mem", Static)
-            mem_w.update(dashboard_ui._mem_content(mem, history=list(self._mem_hist)))
+            mem_w.update(dashboard_ui.mem_content(mem, history=list(self._mem_hist)))
             mem_w.border_title = dashboard_ui.mem_title_summary(mem)
             self._refresh_subtitle()
 
@@ -812,7 +811,7 @@ def _build_app_class():
             self._therm = therm
             self._updated["thermal"] = time.time()
             therm_w = self.query_one("#thermal", Static)
-            therm_w.update(dashboard_ui._thermal_content(therm))
+            therm_w.update(dashboard_ui.thermal_content(therm))
             therm_w.border_title = dashboard_ui.thermal_title_summary(therm)
             self._refresh_subtitle()
 
@@ -820,7 +819,7 @@ def _build_app_class():
             self._batt = batt
             self._updated["battery"] = time.time()
             batt_w = self.query_one("#battery", Static)
-            batt_w.update(dashboard_ui._battery_content(batt))
+            batt_w.update(dashboard_ui.battery_content(batt))
             batt_w.border_title = dashboard_ui.battery_title_summary(batt)
             self._refresh_subtitle()
 

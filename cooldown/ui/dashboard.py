@@ -326,7 +326,7 @@ def _kv(rows: list[tuple[str, str]]) -> Table:
     return t
 
 
-def _cpu_content(
+def cpu_content(
     sys_stats: sys_mod.SystemStats,
     *,
     history: list[float] | None = None,
@@ -414,7 +414,7 @@ def _cpu_content(
 
 def _cpu_panel(sys_stats: sys_mod.SystemStats) -> Panel:
     return Panel(
-        _cpu_content(sys_stats),
+        cpu_content(sys_stats),
         title=Text.from_markup(cpu_title_summary(sys_stats)),
         box=SIMPLE,
         border_style="blue",
@@ -493,7 +493,7 @@ def _memory_composition(mem: mem_mod.MemoryStats, *, width: int = 24) -> tuple[s
     return bar_str, legend_str
 
 
-def _mem_content(
+def mem_content(
     mem: mem_mod.MemoryStats,
     *,
     history: list[float] | None = None,
@@ -537,7 +537,7 @@ def _mem_content(
 
 def _mem_panel(mem: mem_mod.MemoryStats) -> Panel:
     return Panel(
-        _mem_content(mem),
+        mem_content(mem),
         title=Text.from_markup(mem_title_summary(mem)),
         box=SIMPLE,
         border_style="magenta",
@@ -553,7 +553,7 @@ def _pressure_badge(level: str) -> str:
     return mapping.get(level, "[dim]unknown[/]")
 
 
-def _thermal_content(t: therm_mod.ThermalStats) -> Table:
+def thermal_content(t: therm_mod.ThermalStats) -> Table:
     """Thermal / power summary, clustered into three semantic rows.
 
     Earlier versions rendered each pmset/SMC field on its own row,
@@ -632,14 +632,14 @@ def _thermal_content(t: therm_mod.ThermalStats) -> Table:
 
 def _thermal_panel(t: therm_mod.ThermalStats) -> Panel:
     return Panel(
-        _thermal_content(t),
+        thermal_content(t),
         title=Text.from_markup(thermal_title_summary(t)),
         box=SIMPLE,
         border_style="red",
     )
 
 
-def _battery_content(b: batt_mod.BatteryStats | None) -> Table:
+def battery_content(b: batt_mod.BatteryStats | None) -> Table:
     """Battery cell details — capacity, cycles, temp, charge state.
 
     Temperature belongs on the *first line* here rather than in Thermal
@@ -724,7 +724,7 @@ def _battery_content(b: batt_mod.BatteryStats | None) -> Table:
 
 def _battery_panel(b: batt_mod.BatteryStats | None) -> Panel:
     return Panel(
-        _battery_content(b),
+        battery_content(b),
         title=Text.from_markup(battery_title_summary(b)),
         box=SIMPLE,
         border_style="green",
@@ -783,7 +783,7 @@ def _cli_panel(procs: list[procs_mod.ProcInfo]) -> Panel:
     return Panel(table, title=title, box=SIMPLE, border_style="yellow")
 
 
-def _health_score(
+def health_score(
     mem: mem_mod.MemoryStats,
     sys_stats: sys_mod.SystemStats,
     t: therm_mod.ThermalStats,
@@ -856,7 +856,7 @@ def render(console: Console | None = None) -> None:
         except Exception:  # noqa: BLE001
             batt = None
 
-    score, score_color = _health_score(mem, sys_stats, therm, batt)
+    score, score_color = health_score(mem, sys_stats, therm, batt)
     header_bits = [
         "[bold]cooldown[/] status",
         f"Health [bold {score_color}]● {score}[/]",
@@ -945,7 +945,7 @@ def render_json(console: Console | None = None) -> None:
         batt = batt_mod.collect()
     except Exception:  # noqa: BLE001
         batt = None
-    score, _ = _health_score(mem, sys_stats, therm, batt)
+    score, _ = health_score(mem, sys_stats, therm, batt)
     payload = {
         "health_score": score,
         "host": {
