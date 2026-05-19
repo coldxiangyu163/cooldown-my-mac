@@ -93,9 +93,8 @@ Requires Python 3.11+ (tested on 3.13 / 3.14). Registers two entry points: `cool
 ```bash
 git clone https://github.com/coldxiangyu163/cooldown-my-mac.git
 cd cooldown-my-mac
-python3 -m venv .venv
-.venv/bin/pip install -e ".[watch,dev]"
-echo "alias cool='$(pwd)/.venv/bin/cool'" >> ~/.zshrc && source ~/.zshrc
+uv sync --extra watch --extra dev
+uv run cool status
 ```
 
 </details>
@@ -186,7 +185,7 @@ cool apps resume --kind wechat -y                     # SIGCONT
 
 **Thermal / launchd / daemon `cool thermal` · `cool launchd` · `cool daemon`**
 ```bash
-cool thermal --restore            # reset displaysleep / disksleep / unblock sleep
+cool thermal --restore            # reset displaysleep / disksleep / powernap defaults
 cool launchd --audit --disable    # list third-party agents + interactive bootout (Apple refused)
 cool daemon install               # register the 24/7 LaunchAgent
 ```

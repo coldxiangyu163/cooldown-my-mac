@@ -80,9 +80,10 @@ class _FakeProc:
 
     def oneshot(self):
         class _Ctx:
-            def __enter__(self_inner):
-                return self_inner
-            def __exit__(self_inner, *_a):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_a):
                 return False
         return _Ctx()
 

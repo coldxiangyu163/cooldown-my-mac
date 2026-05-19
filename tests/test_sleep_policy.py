@@ -35,6 +35,23 @@ def test_apply_is_idempotent(mocker):
     sudo.assert_not_called()
 
 
+def test_apply_changes_when_only_powernap_differs(mocker):
+    mocker.patch.object(sleep_policy, "_pmset_g", return_value=PMSET_OUT)
+    called = {}
+
+    def fake_sudo(args, *, dry_run):
+        called["args"] = args
+        return sleep_policy.ApplyOutcome(True, True, "applied")
+
+    mocker.patch.object(sleep_policy, "_sudo_pmset", side_effect=fake_sudo)
+
+    target = sleep_policy.SleepPolicy(displaysleep=2, disksleep=10, powernap=False)
+    out = sleep_policy.apply(target, source="ac", dry_run=True)
+    assert out.ok is True
+    assert out.changed is True
+    assert called["args"][-2:] == ["powernap", "0"]
+
+
 def test_apply_calls_sudo_pmset_on_change(mocker):
     mocker.patch.object(sleep_policy, "_pmset_g", return_value=PMSET_OUT)
     called = {}
@@ -54,6 +71,7 @@ def test_apply_calls_sudo_pmset_on_change(mocker):
     assert called["args"][0] == "-c"
     assert "displaysleep" in called["args"]
     assert "10" in called["args"]
+    assert called["args"][-2:] == ["powernap", "0"]
 
 
 def test_restore_defaults_dry_run(mocker):

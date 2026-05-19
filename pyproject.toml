@@ -41,6 +41,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-mock>=3.12",
+    "pyright>=1.1.400",
     "ruff>=0.6",
     "textual>=0.70",
 ]
@@ -62,6 +63,14 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 ignore = ["E501", "B008"]  # B008: typer.Option in defaults is idiomatic
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+include = ["cooldown", "tests"]
+exclude = [".venv", ".ruff_cache", ".pytest_cache"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

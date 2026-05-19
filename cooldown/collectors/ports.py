@@ -203,6 +203,59 @@ def find_conflicts(entries: list[PortEntry]) -> list[tuple[int, list[PortEntry]]
     return out
 
 
+def collapse_inherited(
+    entries: list[PortEntry],
+    ancestors: dict[int, set[int]],
+) -> tuple[list[PortEntry], dict[int, list[int]]]:
+    """Collapse parent/child reloader rows that share one listening socket.
+
+    When a process forks (uvicorn ``--reload``, flask reloader, …) the
+    child inherits the parent's listening fd, so ``lsof -sTCP:LISTEN``
+    reports both — yet there is only one listener in the kernel. This
+    folds children into their root and returns the inheriting PIDs as
+    "workers" so callers can still surface them.
+
+    ``ancestors[pid]`` is the set of pids in ``pid``'s ancestor chain.
+    A PID with no in-group ancestor is treated as a root; a PID with
+    one or more is treated as a child of the deepest in-group ancestor.
+
+    PIDs unrelated to each other on the same port (the real "conflict"
+    case — two daemons fighting for the same socket) stay as separate
+    roots so callers can still flag them.
+    """
+    by_port: dict[int, list[PortEntry]] = {}
+    for e in entries:
+        by_port.setdefault(e.port, []).append(e)
+
+    kept: list[PortEntry] = []
+    workers: dict[int, list[int]] = {}
+    for items in by_port.values():
+        pids_on_port = {e.pid for e in items}
+        if len(pids_on_port) <= 1:
+            kept.extend(items)
+            continue
+        roots: set[int] = set()
+        children: set[int] = set()
+        for pid in pids_on_port:
+            if ancestors.get(pid, set()) & (pids_on_port - {pid}):
+                children.add(pid)
+            else:
+                roots.add(pid)
+        if not children:
+            kept.extend(items)
+            continue
+        # Map each child to its nearest in-group ancestor (the root it
+        # inherited the socket from). Falls back to "any root" if the
+        # chain isn't fully observable.
+        for child in children:
+            anc_in_group = ancestors.get(child, set()) & roots
+            if anc_in_group:
+                root_pid = next(iter(anc_in_group))
+                workers.setdefault(root_pid, []).append(child)
+        kept.extend(e for e in items if e.pid in roots)
+    return kept, workers
+
+
 def enrich_command(entries: list[PortEntry]) -> None:
     """Populate ``entry.command`` with the process cmdline. One psutil
     lookup per unique pid. Failures leave ``command`` as the empty string.

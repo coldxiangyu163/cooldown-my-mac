@@ -8,6 +8,7 @@ import pytest
 
 pytest.importorskip("textual")
 
+from cooldown.collectors.project import Project  # noqa: E402
 from cooldown.ui import watch  # noqa: E402
 
 
@@ -50,6 +51,43 @@ def test_watch_app_has_required_bindings():
     # New dashboard adds slow refresh, dry-run, kill, focus shortcuts.
     for expected in ("R", "d", "k", "K", "1", "2", "3"):
         assert expected in keys, f"missing binding: {expected!r} (have {keys})"
+
+
+def test_watch_kill_toasts_make_dry_run_explicit():
+    msg, severity = watch.kill_start_message(dry_run=True, force=False, pids=1)
+    assert severity == "information"
+    assert "DRY-RUN" in msg
+    assert "no process killed" in msg
+    assert "press d for LIVE" in msg
+
+    done, done_severity = watch.kill_done_message(dry_run=True, ok=1, failed=0)
+    assert done_severity == "information"
+    assert "0 killed" in done
+
+
+def test_watch_live_kill_toasts_report_real_action():
+    msg, severity = watch.kill_start_message(dry_run=False, force=False, pids=2)
+    assert msg == "SIGTERM 2 pid(s)…"
+    assert severity == "warning"
+
+    done, done_severity = watch.kill_done_message(dry_run=False, ok=1, failed=1)
+    assert done == "1 killed · 1 failed"
+    assert done_severity == "warning"
+
+
+def test_watch_kill_toast_surfaces_worker_breakdown():
+    """When a folded reloader row signals more PIDs than rows selected,
+    the toast must spell out the breakdown so the count isn't a
+    surprise to the user."""
+    dry, _ = watch.kill_start_message(
+        dry_run=True, force=False, pids=2, workers=1
+    )
+    assert "DRY-RUN 2 pid(s) (1 + 1 worker)" in dry
+
+    live, _ = watch.kill_start_message(
+        dry_run=False, force=True, pids=3, workers=2
+    )
+    assert live == "SIGKILL 3 pid(s) (1 + 2 workers)…"
 
 
 def test_watch_app_compose_contains_healthbar_body_footer():
@@ -125,9 +163,7 @@ def test_build_project_rows_ranks_by_rss():
             pid=pid, ppid=1, lang=lang, framework=None, name=lang,
             cmdline=lang, rss=rss, cpu_percent=0.0, age=0.0,
             cwd=None,
-            project=None if project is None else type(
-                "P", (), {"name": project, "path": project}
-            )(),
+            project=None if project is None else Project(root=project, name=project, markers=[]),
             launcher=Launcher(kind="launchd", label="launchd", pid=1),
             is_orphan=orphan, user="me",
         )
@@ -164,6 +200,21 @@ def test_build_port_rows_dedup_ipv4_ipv6_twins():
     assert ports_ == [3306, 5432]
 
 
+def test_build_port_rows_carries_workers_through():
+    """The ``workers_by_pid`` map must reach the rendered ``PortRow``
+    so the table can display the ``+N worker`` chip."""
+    from cooldown.collectors.ports import PortEntry
+
+    parent = PortEntry(port=8000, proto="tcp4", bind="*", pid=19873,
+                       process="python3.13", user="me")
+    rows = watch.build_port_rows(
+        [parent], {}, {}, workers_by_pid={19873: [31043]}
+    )
+    assert len(rows) == 1
+    assert rows[0].pid == 19873
+    assert rows[0].workers == [31043]
+
+
 def test_render_subtitle_includes_all_bits():
     from cooldown.collectors.memory import MemoryStats
 
@@ -175,7 +226,6 @@ def test_render_subtitle_includes_all_bits():
     )
     sub = watch.render_subtitle(
         mem=mem, sys_stats=None, therm=None, procs=[],
-        last_op=None, fast_interval=3, slow_interval=15,
         paused=False, dry_run=True,
     )
     assert "pressure" in sub
@@ -209,7 +259,6 @@ def test_render_subtitle_embeds_host_and_battery_when_provided():
     )
     sub = watch.render_subtitle(
         mem=None, sys_stats=None, therm=None, procs=None,
-        last_op=None, fast_interval=3, slow_interval=15,
         paused=False, dry_run=False,
         host=host, battery=batt,
     )
@@ -234,37 +283,13 @@ def test_render_subtitle_embeds_host_and_battery_when_provided():
 
 
 # ---------------------------------------------------------------------------
-# Oplog tail (pure IO test)
-# ---------------------------------------------------------------------------
-
-def test_last_oplog_entry_reads_trailing_line(tmp_path, monkeypatch):
-    log = tmp_path / "operations.log"
-    log.write_text(
-        '{"ts": "2026-04-19T10:00:00", "action": "reap.dry-run", "pid": 1}\n'
-        '{"ts": "2026-04-19T10:05:00", "action": "reap.kill", "pid": 2}\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(watch, "LOG_PATH", log)
-    result = watch._last_oplog_entry()
-    assert result is not None
-    action, ts = result
-    assert action == "reap.kill"
-    assert ts > 0
-
-
-def test_last_oplog_entry_returns_none_when_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(watch, "LOG_PATH", tmp_path / "nonexistent.log")
-    assert watch._last_oplog_entry() is None
-
-
-# ---------------------------------------------------------------------------
 # End-to-end: mount the app headlessly and push one fake tick through each
 # apply handler. This catches layout / CSS / widget-id regressions that the
 # pure-logic tests above miss.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_watch_app_end_to_end_mount_and_apply(monkeypatch):
+async def test_watch_app_end_to_end_mount_and_apply():
     from cooldown.collectors.memory import MemoryStats
     from cooldown.collectors.procs import ProcInfo
     from cooldown.collectors.system import SystemStats
@@ -273,8 +298,6 @@ async def test_watch_app_end_to_end_mount_and_apply(monkeypatch):
     app_cls = watch._build_app_class()
     app = app_cls(fast_interval=999, slow_interval=999)
 
-    # No oplog -> subtitle still renders cleanly.
-    monkeypatch.setattr(watch, "_last_oplog_entry", lambda: None)
     # Suppress the on_mount bootstrap workers so the test's explicit
     # _apply_ports / _apply_projects synthetic data isn't overwritten by
     # the real-machine port scan that the slow tick would otherwise run.

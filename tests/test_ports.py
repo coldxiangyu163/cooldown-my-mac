@@ -129,6 +129,66 @@ def test_find_conflicts_different_pids_same_port_is_conflict():
     assert {e.pid for e in group} == {100, 200}
 
 
+def test_collapse_inherited_folds_reloader_child():
+    """Parent + forked child sharing one listening socket should collapse
+    to one row with the child surfaced as a worker — the uvicorn
+    ``--reload`` / flask debug-server case from the dashboard."""
+    parent = PortEntry(port=8000, proto="tcp4", bind="*", pid=19873,
+                       process="python3.13", user="me")
+    child = PortEntry(port=8000, proto="tcp4", bind="*", pid=31043,
+                      process="python3.13", user="me")
+    ancestors = {19873: set(), 31043: {19873}}
+
+    kept, workers = ports_mod.collapse_inherited([parent, child], ancestors)
+    assert [e.pid for e in kept] == [19873]
+    assert workers == {19873: [31043]}
+
+
+def test_collapse_inherited_keeps_unrelated_same_port():
+    """Two unrelated PIDs on the same port (the real conflict case)
+    must stay split — we don't have evidence one inherited from the
+    other, so collapsing would hide a genuine conflict."""
+    a = PortEntry(port=3000, proto="tcp4", bind="*", pid=100,
+                  process="node", user="me")
+    b = PortEntry(port=3000, proto="tcp4", bind="127.0.0.1", pid=200,
+                  process="ruby", user="me")
+    # Neither pid appears in the other's ancestor chain.
+    ancestors = {100: {1}, 200: {1}}
+
+    kept, workers = ports_mod.collapse_inherited([a, b], ancestors)
+    assert sorted(e.pid for e in kept) == [100, 200]
+    assert workers == {}
+
+
+def test_collapse_inherited_handles_grandchild_chain():
+    """Three-deep chain (parent → reloader → worker) folds onto the
+    top-most ancestor in the group, not the middle one."""
+    a = PortEntry(port=8000, proto="tcp4", bind="*", pid=1,
+                  process="python3.13", user="me")
+    b = PortEntry(port=8000, proto="tcp4", bind="*", pid=2,
+                  process="python3.13", user="me")
+    c = PortEntry(port=8000, proto="tcp4", bind="*", pid=3,
+                  process="python3.13", user="me")
+    ancestors = {1: set(), 2: {1}, 3: {2, 1}}
+
+    kept, workers = ports_mod.collapse_inherited([a, b, c], ancestors)
+    assert [e.pid for e in kept] == [1]
+    assert sorted(workers[1]) == [2, 3]
+
+
+def test_collapse_inherited_no_ancestors_keeps_all():
+    """When ancestry data is missing (CLI without optional ancestry
+    collector), the helper must degrade to a no-op so existing rows
+    aren't silently dropped."""
+    a = PortEntry(port=3000, proto="tcp4", bind="*", pid=100,
+                  process="node", user="me")
+    b = PortEntry(port=3000, proto="tcp4", bind="*", pid=200,
+                  process="ruby", user="me")
+    kept, workers = ports_mod.collapse_inherited([a, b], {})
+    assert sorted(e.pid for e in kept) == [100, 200]
+    assert workers == {}
+
+
 def test_by_project_hint_known_ports():
     assert ports_mod.by_project_hint(3306) == "mysql"
     assert ports_mod.by_project_hint(5432) == "postgres"
@@ -162,3 +222,32 @@ def test_ui_run_free_range_with_no_entries(monkeypatch):
     monkeypatch.setattr(ports_mod, "collect", lambda: [])
     console = Console(force_terminal=False)
     assert ports_ui.run(console, free="4000:4005") == 0
+
+
+def test_ui_run_json_includes_workers_after_collapse(monkeypatch):
+    """`cool ports --json` must expose the inherited-worker PIDs so
+    scripted callers see the same row count `cool watch` does."""
+    parent = PortEntry(port=8000, proto="tcp4", bind="*", pid=19873,
+                       process="python3.13", user="me")
+    child = PortEntry(port=8000, proto="tcp4", bind="*", pid=31043,
+                      process="python3.13", user="me")
+
+    monkeypatch.setattr(ports_mod, "collect", lambda: [parent, child])
+    monkeypatch.setattr(ports_mod, "enrich_command", lambda _entries: None)
+    monkeypatch.setattr(ports_ui, "_project_mod", None, raising=False)
+    # Synthetic ancestry: child inherits from parent.
+    monkeypatch.setattr(
+        ports_ui, "_ancestors_for", lambda _pids: {19873: set(), 31043: {19873}}
+    )
+
+    console = Console(record=True, width=200, force_terminal=False)
+    rc = ports_ui.run(console, json_out=True)
+    assert rc == 0
+
+    import json as _json
+
+    payload = _json.loads(console.export_text())
+    assert len(payload) == 1
+    row = payload[0]
+    assert row["pid"] == 19873
+    assert row["workers"] == [31043]
