@@ -42,6 +42,11 @@ It does **not replace** [Mole](https://github.com/tw93/Mole) (disk cleanup) / [m
 - Auto-detects MCP servers (chrome-devtools-mcp / sequential-thinking / filesystem / any npx package) so they don't pollute your real project stats
 - Every dev process tagged with `project root + launcher + lang/framework`; a 7-level fallback chain guarantees coverage (`cwd unknown` never shows up)
 
+**CPU runaway visibility**
+- `Hot Processes by CPU%` panel ranks the top PIDs by current CPU%, **regardless of AI family** — MCP child scripts, Chrome renderers, third-party GUIs all surface here
+- Anything at ≥ 80% of a single core is painted bold red, so a runaway PID is visible at a glance
+- Shared between `cool status` and `cool watch`; press `k` to kill the PID you just visually picked
+
 **Hardware awareness**
 - Battery: `ioreg` for cell temp / cycles / health
 - SMC: CPU/GPU temps + CPU throttle state
@@ -108,6 +113,7 @@ By use case:
 | Don't know where to start — pop the interactive menu | `cool` |
 | See overall Mac health (CPU / mem / temp / AI CLI count) | `cool status` |
 | Open the full-screen live dashboard | `cool watch` |
+| **CPU is on fire — pinpoint which PID** | `cool status` or `cool watch`, read the Hot Processes panel |
 | Find which AI CLI session is hogging the most | `cool procs` |
 | Reap every AI CLI idle ≥ 30 min (incl. their MCP children) | `cool reap` |
 | See which project each dev proc belongs to — and which AI spawned it | `cool dev` |
@@ -120,7 +126,7 @@ By use case:
 
 Every command takes `--help` for its full flag set. The most common invocations:
 
-**Live dashboard `cool watch`** — dual-tempo refresh: fast tick (3 s) samples CPU/Memory/Thermal/Battery/AI CLI; slow tick (15 s) samples Top Projects/Ports. Screenshot at [top](#cooldown-my-mac).
+**Live dashboard `cool watch`** — dual-tempo refresh: fast tick (3 s) samples CPU/Memory/Thermal/Battery/AI CLI/Hot Processes; slow tick (15 s) samples Top Projects/Ports. Screenshot at [top](#cooldown-my-mac).
 
 ```text
 ┌─ Health · Model · Chip · RAM/Disk · macOS · uptime · batt temp · pressure · ⟳ 3s/15s ─┐
@@ -133,10 +139,10 @@ Every command takes `--help` for its full flag set. The most common invocations:
 ├──────────────────────────────────┼──────────────────────────────────┤
 │  AI CLI Inventory                │  Top Projects by RSS             │  slow (15 s)
 │  kind · count · rss · idle       │  project · # · rss · launchers   │
-├──────────────────────────────────┴──────────────────────────────────┤
-│  Listening Ports                                                    │  slow (15 s)
-│  port · proto · pid · process · project · launcher                  │
-└─────────────────────────────────────────────────────────────────────┘
+├──────────────────────────────────┼──────────────────────────────────┤
+│  Hot Processes by CPU%           │  Listening Ports                 │  fast / slow
+│  pid · cpu% · rss · age · cmd    │  port · pid · process · launcher │
+└──────────────────────────────────┴──────────────────────────────────┘
 ```
 
 <details>
@@ -149,7 +155,7 @@ Every command takes `--help` for its full flag set. The most common invocations:
 | `p` | Pause / resume |
 | `d` | Toggle dry-run |
 | `k` / `K` | `SIGTERM` / `SIGKILL` selected row |
-| `1` / `2` / `3` | Focus AI CLI / Top Projects / Ports |
+| `1` / `2` / `3` / `4` | Focus AI CLI / Top Projects / Ports / Hot Processes |
 | `+` / `-` | Fast-tick interval ±1 s |
 | `[` / `]` | Slow-tick interval ±5 s |
 | `Tab` / arrows | Navigate within a table |

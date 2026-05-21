@@ -42,6 +42,11 @@ AI vibe coding 时代，Mac 卡顿的元凶变了：
 - 自动识别 MCP server（chrome-devtools-mcp / sequential-thinking / filesystem / 任意 npx 包），不会污染你真正项目的统计
 - 每个 dev 进程归到「项目根 + 启动器 + 语言/框架」，7 级 fallback 链兜底（永远不会出现 `cwd unknown`）
 
+**CPU runaway 可见**
+- `Hot Processes by CPU%` 面板按 CPU% 排出当前 TOP 进程，**不限 AI 家族**——MCP 子脚本、Chrome renderer、第三方 GUI 全都浮上来
+- 单核占用 ≥ 80% 直接标红，肉眼可见"哪一个 PID 在死循环"
+- `cool status` 和 `cool watch` 共用同一规则，按 `k` 杀掉刚刚视觉锁定的 PID
+
 **硬件感知**
 - 电池：ioreg 解析电芯温度 / 循环 / 健康
 - SMC：CPU/GPU 温度 + CPU 节流状态
@@ -108,6 +113,7 @@ uv run cool status
 | 不知从何下手——弹出交互式菜单 | `cool` |
 | 看 Mac 整体健康（CPU / 内存 / 温度 / AI CLI 数量） | `cool status` |
 | 打开全屏实时仪表盘 | `cool watch` |
+| **CPU 在烧——揪出具体是哪个 PID** | `cool status` 或 `cool watch` 看 Hot Processes 面板 |
 | 看哪个 AI CLI 会话最吃资源 | `cool procs` |
 | 一次清掉所有闲置 30 分钟以上的 AI CLI（含 MCP 子进程） | `cool reap` |
 | 看每个 dev 进程到底是哪个项目 / 哪个 AI 拉起来的 | `cool dev` |
@@ -120,7 +126,7 @@ uv run cool status
 
 所有命令都接 `--help` 看完整 flag，下面只列最常用的几条。
 
-**实时仪表盘 `cool watch`** — 双档刷新：fast tick 每 3s 采 CPU/Memory/Thermal/Battery/AI CLI，slow tick 每 15s 采 Top Projects/Ports。截图见[顶部](#cooldown-my-mac)。
+**实时仪表盘 `cool watch`** — 双档刷新：fast tick 每 3s 采 CPU/Memory/Thermal/Battery/AI CLI/Hot Processes，slow tick 每 15s 采 Top Projects/Ports。截图见[顶部](#cooldown-my-mac)。
 
 ```text
 ┌─ Health · 机型 · 芯片 · RAM/Disk · macOS · uptime · 电池温度 · 内存压力 · ⟳ 3s/15s ─┐
@@ -133,10 +139,10 @@ uv run cool status
 ├──────────────────────────────────┼──────────────────────────────────┤
 │  AI CLI Inventory                │  Top Projects by RSS             │  slow (15s)
 │  kind · count · rss · idle       │  project · # · rss · launchers   │
-├──────────────────────────────────┴──────────────────────────────────┤
-│  Listening Ports                                                    │  slow (15s)
-│  port · proto · pid · process · project · launcher                  │
-└─────────────────────────────────────────────────────────────────────┘
+├──────────────────────────────────┼──────────────────────────────────┤
+│  Hot Processes by CPU%           │  Listening Ports                 │  fast / slow
+│  pid · cpu% · rss · age · cmd    │  port · pid · process · launcher │
+└──────────────────────────────────┴──────────────────────────────────┘
 ```
 
 <details>
@@ -149,7 +155,7 @@ uv run cool status
 | `p` | 暂停 / 恢复 |
 | `d` | 切换 dry-run |
 | `k` / `K` | `SIGTERM` / `SIGKILL` 选中行 |
-| `1` / `2` / `3` | 焦点切到 AI CLI / Top Projects / Ports |
+| `1` / `2` / `3` / `4` | 焦点切到 AI CLI / Top Projects / Ports / Hot Processes |
 | `+` / `-` | fast tick 间隔 ±1 秒 |
 | `[` / `]` | slow tick 间隔 ±5 秒 |
 | `Tab` / 方向键 | 表内导航 |
