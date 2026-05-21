@@ -346,10 +346,16 @@ async def test_watch_app_end_to_end_mount_and_apply():
                 process="node", project="web", launcher="droid",
             )
         ])
+        app._apply_hot([
+            watch.HotRow(
+                pid=78303, cpu_percent=9.8, rss=600 * 1024**2,
+                age=4 * 3600.0, user="me", cmd="python doctor.py",
+            )
+        ])
         await pilot.pause()
 
-        # All six panels are mounted with the expected ids.
-        for panel_id in ("cpu", "mem", "thermal", "ai", "projects", "ports"):
+        # All seven panels are mounted with the expected ids.
+        for panel_id in ("cpu", "mem", "thermal", "ai", "projects", "hot", "ports"):
             assert app.query_one(f"#{panel_id}") is not None
 
         # Healthbar Static (which replaces the header subtitle) is populated
@@ -366,3 +372,44 @@ async def test_watch_app_end_to_end_mount_and_apply():
         assert app.query_one("#ai", DataTable).row_count == 1
         assert app.query_one("#projects", DataTable).row_count == 1
         assert app.query_one("#ports", DataTable).row_count == 1
+        assert app.query_one("#hot", DataTable).row_count == 1
+
+
+def test_watch_app_binds_focus_hot_to_4():
+    """The Hot Processes panel must be reachable via the `4` shortcut so
+    the user can jump straight there when CPU is on fire."""
+    app_cls = watch._build_app_class()
+    keys = _binding_keys(app_cls.BINDINGS)
+    assert "4" in keys, f"missing binding: '4' for hot procs (have {keys})"
+
+
+def test_build_hot_rows_truncates_to_limit():
+    """``build_hot_rows`` must respect ``limit`` so the table doesn't
+    blow past the 8-row visual budget when psutil returns a wide TOP-N."""
+    from cooldown.collectors import hot_procs as hot_mod
+    raw = [
+        hot_mod.HotProc(
+            pid=i, name="p", cmdline=f"py {i}.py",
+            cpu_percent=float(100 - i), rss=1, user="u",
+            create_time=0.0, age=1.0,
+        )
+        for i in range(20)
+    ]
+    rows = watch.build_hot_rows(raw, limit=5)
+    assert len(rows) == 5
+    assert rows[0].pid == 0  # first item preserved (already CPU-sorted upstream)
+
+
+def test_targets_for_hot_returns_single_pid():
+    """A Hot Processes row maps to exactly one PID — unlike AI / project
+    rows which aggregate. This guarantees ``k`` kills only what the user
+    visually picked."""
+    app_cls = watch._build_app_class()
+    app = app_cls(fast_interval=999, slow_interval=999)
+    app._hot_rows = [
+        watch.HotRow(pid=4242, cpu_percent=50.0, rss=1,
+                     age=10.0, user="u", cmd="py burn.py"),
+    ]
+    targets = app._targets_for("hot", 0)
+    assert [t.pid for t in targets] == [4242]
+    assert targets[0].cmdline == "py burn.py"

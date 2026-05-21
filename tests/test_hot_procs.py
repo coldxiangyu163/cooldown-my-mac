@@ -122,7 +122,7 @@ def test_shorten_cmd_strips_long_python_paths():
     """The shortener must turn a full Python interpreter path + script
     into the readable tail, otherwise the cmd column eats the whole row."""
     cmd = "/opt/homebrew/Cellar/python@3.14/3.14.4/.../Python /Users/me/.hermes/scripts/doctor.py --flag /Users/me/value.json"
-    out = dashboard._shorten_cmd("Python", cmd)
+    out = dashboard.shorten_cmd("Python", cmd)
     assert out.startswith("Python doctor.py")
     assert "value.json" in out
     assert "/Users/me/" not in out
@@ -132,8 +132,8 @@ def test_shorten_cmd_strips_long_python_paths():
 def test_shorten_cmd_handles_empty_cmdline():
     """When cmdline is empty (kernel threads, defunct procs), fall back
     to the process name rather than rendering blank rows."""
-    assert dashboard._shorten_cmd("kernel_task", "") == "kernel_task"
-    assert dashboard._shorten_cmd("", "") == "?"
+    assert dashboard.shorten_cmd("kernel_task", "") == "kernel_task"
+    assert dashboard.shorten_cmd("", "") == "?"
 
 
 def test_hot_procs_content_handles_empty():
