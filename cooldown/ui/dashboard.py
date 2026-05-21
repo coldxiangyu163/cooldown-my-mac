@@ -14,6 +14,7 @@ from rich.table import Table
 from rich.text import Text
 
 from ..collectors import battery as batt_mod
+from ..collectors import hot_procs as hot_mod
 from ..collectors import memory as mem_mod
 from ..collectors import procs as procs_mod
 from ..collectors import system as sys_mod
@@ -774,6 +775,80 @@ def _cli_panel(procs: list[procs_mod.ProcInfo]) -> Panel:
     return Panel(table, title=title, box=SIMPLE, border_style="yellow")
 
 
+def _shorten_cmd(name: str, cmdline: str, width: int = 56) -> str:
+    """Pick the most informative tail of a long command line.
+
+    For ``python /Users/.../script.py --flag value`` we want
+    ``python script.py --flag value``, not ``/opt/homebrew/Cellar/python@3.14``.
+    Falls back to ``name`` when cmdline parsing leaves nothing useful.
+    """
+    parts = cmdline.split()
+    if not parts:
+        return name or "?"
+    head = parts[0].rsplit("/", 1)[-1] or parts[0]
+    rest_parts: list[str] = []
+    for tok in parts[1:]:
+        # Strip long absolute paths to their basename for readability.
+        # Keep the leading flag indicator (``--``) intact.
+        if tok.startswith("/") and "/" in tok[1:]:
+            tok = tok.rsplit("/", 1)[-1]
+        rest_parts.append(tok)
+    rest = " ".join(rest_parts)
+    shown = f"{head} {rest}".strip() if rest else head
+    if len(shown) > width:
+        shown = shown[: width - 1] + "…"
+    return shown
+
+
+def hot_procs_content(rows: list[hot_mod.HotProc], ncpu: int) -> Table:
+    """Render a TOP-by-CPU% table. Public so ``cool watch`` can reuse it."""
+    table = Table(box=None, expand=True, show_edge=False)
+    table.add_column("pid", justify="right", style="dim")
+    table.add_column("cpu%", justify="right")
+    table.add_column("rss", justify="right")
+    table.add_column("age", justify="right", style="dim")
+    table.add_column("user", style="dim")
+    table.add_column("cmd")
+
+    if not rows:
+        table.add_row("", "—", "—", "—", "—", "[dim]nothing burning CPU right now[/]")
+        return table
+
+    # cpu_percent is normalized to total-CPU share; ``cpu_percent * ncpu``
+    # tells you "this process is using N cores' worth of work". Anything
+    # north of ~70% of a single core is suspicious for a non-build /
+    # non-render workload, so paint the cpu% column accordingly.
+    for h in rows:
+        per_core_pct = h.cpu_percent * ncpu
+        if per_core_pct >= 80:
+            cpu_clr = "bold red"
+        elif per_core_pct >= 40:
+            cpu_clr = "yellow"
+        else:
+            cpu_clr = "green"
+        table.add_row(
+            str(h.pid),
+            f"[{cpu_clr}]{h.cpu_percent:.1f}[/]",
+            human_bytes(h.rss),
+            human_duration(h.age),
+            (h.user or "")[:10],
+            _shorten_cmd(h.name, h.cmdline),
+        )
+    return table
+
+
+def _hot_procs_panel(rows: list[hot_mod.HotProc], ncpu: int) -> Panel:
+    # Surface total share-of-CPU in the title so the user sees the heat
+    # budget at a glance ("5 hot procs · 187% of CPU" is more legible
+    # than scanning 5 rows and summing in your head).
+    total = sum(h.cpu_percent for h in rows) if rows else 0.0
+    title = (
+        f"[bold]Hot Processes by CPU%[/]  "
+        f"[dim]· {len(rows)} shown · {total:.1f}% total[/]"
+    )
+    return Panel(hot_procs_content(rows, ncpu), title=title, box=SIMPLE, border_style="red")
+
+
 def health_score(
     mem: mem_mod.MemoryStats,
     sys_stats: sys_mod.SystemStats,
@@ -838,6 +913,7 @@ def render(console: Console | None = None) -> None:
         therm = therm_mod.collect()
         procs = procs_mod.collect()
         procs_mod.enrich_idle(procs)
+        hot = hot_mod.collect(top_n=5)
         # Battery temperature is one of the headline cooldown signals; the
         # collector returns None on desktop Macs (Mac mini / Studio / Pro),
         # in which case the panel renders an explicit "no battery" empty
@@ -871,6 +947,7 @@ def render(console: Console | None = None) -> None:
         for panel in panels:
             console.print(panel)
     console.print(_cli_panel(procs))
+    console.print(_hot_procs_panel(hot, sys_stats.cpu_count_logical))
     console.print(_dev_panel())
 
     # Actionable advice block. Print every hint that applies, in
@@ -932,6 +1009,7 @@ def render_json(console: Console | None = None) -> None:
     therm = therm_mod.collect()
     procs = procs_mod.collect()
     procs_mod.enrich_idle(procs)
+    hot = hot_mod.collect(top_n=5)
     try:
         batt = batt_mod.collect()
     except Exception:  # noqa: BLE001
@@ -949,6 +1027,7 @@ def render_json(console: Console | None = None) -> None:
         "thermal": _as_jsonable(therm),
         "battery": _as_jsonable(batt) if batt is not None else None,
         "procs": [_as_jsonable(p) for p in procs],
+        "hot_procs": [_as_jsonable(h) for h in hot],
     }
     console.print_json(json.dumps(payload, default=str))
 
