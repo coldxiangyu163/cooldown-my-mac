@@ -775,7 +775,7 @@ def _cli_panel(procs: list[procs_mod.ProcInfo]) -> Panel:
     return Panel(table, title=title, box=SIMPLE, border_style="yellow")
 
 
-def _shorten_cmd(name: str, cmdline: str, width: int = 56) -> str:
+def shorten_cmd(name: str, cmdline: str, width: int = 56) -> str:
     """Pick the most informative tail of a long command line.
 
     For ``python /Users/.../script.py --flag value`` we want
@@ -832,7 +832,7 @@ def hot_procs_content(rows: list[hot_mod.HotProc], ncpu: int) -> Table:
             human_bytes(h.rss),
             human_duration(h.age),
             (h.user or "")[:10],
-            _shorten_cmd(h.name, h.cmdline),
+            shorten_cmd(h.name, h.cmdline),
         )
     return table
 

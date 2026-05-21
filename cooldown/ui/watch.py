@@ -59,6 +59,7 @@ from rich.text import Text
 from ..collectors import battery as batt_mod
 from ..collectors import dev as dev_mod
 from ..collectors import hostinfo as host_mod
+from ..collectors import hot_procs as hot_mod
 from ..collectors import memory as mem_mod
 from ..collectors import ports as ports_mod
 from ..collectors import procs as procs_mod
@@ -98,6 +99,21 @@ class ProjectRow:
 
 
 @dataclass
+class HotRow:
+    """One row of the live "Hot Processes by CPU%" panel.
+
+    Mirrors ``hot_procs.HotProc`` but pre-shapes the display strings so the
+    fast-tick callback can hand them to the DataTable directly.
+    """
+    pid: int
+    cpu_percent: float  # normalized share of total CPU (matches ProcInfo)
+    rss: int
+    age: float
+    user: str
+    cmd: str
+
+
+@dataclass
 class PortRow:
     port: int
     proto: str
@@ -125,6 +141,23 @@ def build_ai_rows(procs: list[ProcInfo], limit: int = 20) -> list[AiRow]:
             )
         )
     return out[:limit]
+
+
+def build_hot_rows(rows: list[hot_mod.HotProc], limit: int = 8) -> list[HotRow]:
+    """Adapt ``hot_procs.HotProc`` instances into the DataTable's row shape."""
+    out: list[HotRow] = []
+    for h in rows[:limit]:
+        out.append(
+            HotRow(
+                pid=h.pid,
+                cpu_percent=h.cpu_percent,
+                rss=h.rss,
+                age=h.age,
+                user=h.user,
+                cmd=dashboard_ui.shorten_cmd(h.name, h.cmdline, width=48),
+            )
+        )
+    return out
 
 
 def build_project_rows(devs: list[dev_mod.DevProc], limit: int = 12) -> list[ProjectRow]:
@@ -524,11 +557,12 @@ def _build_app_class():
             color: $accent-lighten-2;
         }
 
-        /* Ports gets the full bottom row — wide tables read much better
-           than narrow ones when attribution columns pile up. */
-        #ports {
-            column-span: 2;
-        }
+        /* The bottom row carries the two PID-level panels side by side:
+           Hot Processes on the left, Listening Ports on the right. Both
+           inherit the half-width grid slot — narrower than the previous
+           full-row ports table, but the upside is the user no longer
+           has to choose between watching CPU runaways and watching
+           ports. */
 
         /* Footer — match the healthbar's $boost background so the top
            and bottom strips frame the panel grid symmetrically. Key
@@ -572,6 +606,7 @@ def _build_app_class():
             Binding("1", "focus_ai", "AI table", show=False),
             Binding("2", "focus_projects", "Projects", show=False),
             Binding("3", "focus_ports", "Ports", show=False),
+            Binding("4", "focus_hot", "Hot procs", show=False),
             Binding("plus,equals_sign", "faster_fast", "Faster", show=False),
             Binding("minus,underscore", "slower_fast", "Slower", show=False),
             Binding("bracket_left", "faster_slow", "Slow+", show=False),
@@ -596,6 +631,7 @@ def _build_app_class():
             self._ai_rows: list[AiRow] = []
             self._project_rows: list[ProjectRow] = []
             self._port_rows: list[PortRow] = []
+            self._hot_rows: list[HotRow] = []
             # Per-panel "last updated" epoch.
             self._updated: dict[str, float] = {}
             # Rolling trend buffers for the CPU / Memory sparklines (last
@@ -640,10 +676,13 @@ def _build_app_class():
             proj = DataTable(id="projects", classes="panel", cursor_type="row", zebra_stripes=True)
             proj.border_title = "Top Projects by RSS"
             proj.border_subtitle = "[dim]focus + k to kill[/]"
+            hot = DataTable(id="hot", classes="panel", cursor_type="row", zebra_stripes=True)
+            hot.border_title = "Hot Processes by CPU%"
+            hot.border_subtitle = "[dim]focus + k to kill[/]"
             ports = DataTable(id="ports", classes="panel", cursor_type="row", zebra_stripes=True)
             ports.border_title = "Listening Ports"
             ports.border_subtitle = "[dim]focus + k to kill[/]"
-            yield Grid(cpu, mem, therm, batt, ai, proj, ports, id="body")
+            yield Grid(cpu, mem, therm, batt, ai, proj, hot, ports, id="body")
             yield Footer()
 
         # ---------------------------------------------------------- mount
@@ -676,6 +715,14 @@ def _build_app_class():
             proj.add_columns(
                 _h("project"), _hr("count"), _hr("total RSS"),
                 _h("launchers"),
+            )
+            hot: DataTable = self.query_one("#hot", DataTable)
+            # cpu% is the lead — it's the reason this panel exists. cmd
+            # lives at the right so a 1-row scan reads "this PID at this %
+            # is running this command".
+            hot.add_columns(
+                _hr("pid"), _hr("cpu%"), _hr("rss"),
+                _hr("age"), _h("user"), _h("cmd"),
             )
             ports: DataTable = self.query_one("#ports", DataTable)
             ports.add_columns(
@@ -757,6 +804,16 @@ def _build_app_class():
             except Exception as exc:  # noqa: BLE001
                 log.exception("watch fast-tick: procs collector failed")
                 self.call_from_thread(self._set_table_error, "ai", exc)
+            try:
+                # ``cool watch`` shares a fast tick budget across collectors;
+                # use a shorter sample window than `cool status`'s 0.3 s so
+                # the 3 s tick doesn't get dominated by a single sleep.
+                hot_raw = hot_mod.collect(top_n=8, sample_interval=0.15)
+                hot_rows = build_hot_rows(hot_raw)
+                self.call_from_thread(self._apply_hot, hot_rows)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("watch fast-tick: hot_procs collector failed")
+                self.call_from_thread(self._set_table_error, "hot", exc)
 
         def _gather_slow(self) -> None:
             try:
@@ -875,6 +932,55 @@ def _build_app_class():
             )
             t.border_subtitle = "[dim]k to kill kind[/]"
             self._refresh_subtitle()
+
+        def _apply_hot(self, rows: list[HotRow]) -> None:
+            """Render the Hot Processes table. Runs on the main thread."""
+            self._hot_rows = rows
+            self._updated["hot"] = time.time()
+            t: DataTable = self.query_one("#hot", DataTable)
+            t.clear()
+
+            def _rj(value: str) -> Text:
+                return Text.from_markup(value, justify="right")
+
+            if not rows:
+                t.add_row(
+                    "[dim]–[/]",
+                    "[dim italic]idle[/]",
+                    "[dim]–[/]",
+                    "[dim]–[/]",
+                    "[dim]–[/]",
+                    "[dim italic]nothing burning CPU right now[/]",
+                )
+                t.border_title = "Hot Processes by CPU%"
+                t.border_subtitle = "[dim]empty[/]"
+                return
+
+            # Reuse the dashboard's per-core threshold so `cool status` and
+            # `cool watch` light up runaways with the same colour rule.
+            ncpu = self._sys.cpu_count_logical if self._sys else 1
+            for row in rows:
+                per_core = row.cpu_percent * max(1, ncpu)
+                if per_core >= 80:
+                    cpu_clr = "bold red"
+                elif per_core >= 40:
+                    cpu_clr = "yellow"
+                else:
+                    cpu_clr = "green"
+                t.add_row(
+                    _rj(str(row.pid)),
+                    _rj(f"[{cpu_clr}]{row.cpu_percent:.1f}[/]"),
+                    _rj(human_bytes(row.rss)),
+                    _rj(human_duration(row.age)),
+                    (row.user or "")[:10],
+                    row.cmd,
+                )
+            total = sum(r.cpu_percent for r in rows)
+            t.border_title = (
+                f"Hot Processes by CPU%  [dim]· {len(rows)} shown · "
+                f"{total:.1f}% total[/]"
+            )
+            t.border_subtitle = "[dim]k to kill pid[/]"
 
         def _apply_projects(self, rows: list[ProjectRow]) -> None:
             self._project_rows = rows
@@ -1026,6 +1132,10 @@ def _build_app_class():
         def action_focus_projects(self) -> None:
             self.query_one("#projects", DataTable).focus()
 
+        def action_focus_hot(self) -> None:
+            with contextlib.suppress(Exception):
+                self.query_one("#hot", DataTable).focus()
+
         def action_focus_ports(self) -> None:
             self.query_one("#ports", DataTable).focus()
 
@@ -1119,6 +1229,13 @@ def _build_app_class():
                         return []
                     pid_set = set(row.pids)
                     return [p for p in self._procs if p.pid in pid_set]
+            elif table_id == "hot" and 0 <= row_idx < len(self._hot_rows):
+                hot_row = self._hot_rows[row_idx]
+                # One row = one PID for Hot Processes (unlike the AI / project
+                # tables that aggregate). The cmd shown in the table is what
+                # the user just visually confirmed they want gone, so plumb
+                # it through verbatim for the oplog audit trail.
+                return [_synth_procinfo(hot_row.pid, "hot", hot_row.cmd)]
             elif table_id == "projects" and 0 <= row_idx < len(self._project_rows):
                 row = self._project_rows[row_idx]
                 # Rebuild lightweight ProcInfo records for the pids.
