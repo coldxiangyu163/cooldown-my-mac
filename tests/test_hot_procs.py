@@ -118,15 +118,52 @@ def test_collect_survives_process_errors(monkeypatch):
     assert [r.pid for r in rows] == [7]
 
 
-def test_shorten_cmd_strips_long_python_paths():
-    """The shortener must turn a full Python interpreter path + script
-    into the readable tail, otherwise the cmd column eats the whole row."""
-    cmd = "/opt/homebrew/Cellar/python@3.14/3.14.4/.../Python /Users/me/.hermes/scripts/doctor.py --flag /Users/me/value.json"
-    out = dashboard.shorten_cmd("Python", cmd)
-    assert out.startswith("Python doctor.py")
-    assert "value.json" in out
+def test_shorten_cmd_strips_interpreter_but_keeps_script_path(monkeypatch):
+    """Interpreter prefix collapses to its basename (`Python`), but the
+    script path keeps enough segments to identify the project — otherwise
+    three `python script.py` rows in different projects all look the same."""
+    monkeypatch.setenv("HOME", "/Users/me")
+    cmd = "/opt/homebrew/Cellar/python@3.14/3.14.4/.../Python /Users/me/.hermes/scripts/doctor.py --flag value"
+    out = dashboard.shorten_cmd("Python", cmd, width=80)
+    assert out.startswith("Python ")
+    # HOME collapsed to ~
+    assert "~/.hermes/scripts/doctor.py" in out
     assert "/Users/me/" not in out
+    # Interpreter front-matter dropped to its basename
     assert "/Cellar/" not in out
+
+
+def test_shorten_cmd_disambiguates_same_basename(monkeypatch):
+    """The Hot Processes panel must let three `Python script.py` from
+    different project dirs render distinguishably. The old basename-only
+    strategy made them identical, which was the bug that motivated this."""
+    monkeypatch.setenv("HOME", "/Users/me")
+    a = dashboard.shorten_cmd("Python", "/usr/bin/python /Users/me/projects/foo/script.py", width=60)
+    b = dashboard.shorten_cmd("Python", "/usr/bin/python /Users/me/projects/bar/script.py", width=60)
+    c = dashboard.shorten_cmd("Python", "/usr/bin/python /Users/me/projects/baz/script.py", width=60)
+    assert a != b != c, f"rows must differ: a={a!r} b={b!r} c={c!r}"
+    assert "foo" in a and "bar" in b and "baz" in c
+
+
+def test_shorten_cmd_truncates_long_paths_from_the_middle(monkeypatch):
+    """When the path is too long for the budget, keep the script tail
+    (parent dir + filename), drop the head with `…/`. The tail is what
+    disambiguates rows; the head usually doesn't."""
+    monkeypatch.setenv("HOME", "/Users/me")
+    cmd = "python /Users/me/a/b/c/d/e/f/g/h/i/long_named_script.py --flag value"
+    out = dashboard.shorten_cmd("python", cmd, width=40)
+    assert len(out) <= 40
+    # Script name and at least its parent dir survive — they identify the row.
+    assert "long_named_script.py" in out
+    assert out.startswith("python ")
+
+
+def test_shorten_cmd_within_budget_returns_intact(monkeypatch):
+    """Short commands must pass through untouched — no spurious …/ noise
+    on a `Python` or `cmux` row that's already minimal."""
+    monkeypatch.setenv("HOME", "/Users/me")
+    assert dashboard.shorten_cmd("cmux", "cmux") == "cmux"
+    assert dashboard.shorten_cmd("python", "python -V") == "python -V"
 
 
 def test_shorten_cmd_handles_empty_cmdline():
@@ -134,6 +171,27 @@ def test_shorten_cmd_handles_empty_cmdline():
     to the process name rather than rendering blank rows."""
     assert dashboard.shorten_cmd("kernel_task", "") == "kernel_task"
     assert dashboard.shorten_cmd("", "") == "?"
+
+
+def test_compact_path_collapses_home():
+    """Direct unit test on the helper — exact substitution rules."""
+    p = dashboard._compact_path("/Users/me/x/y.py", home="/Users/me")
+    assert p == "~/x/y.py"
+    # Different home → no rewrite
+    p2 = dashboard._compact_path("/Users/other/x/y.py", home="/Users/me")
+    assert p2 == "/Users/other/x/y.py"
+    # Exactly the home dir
+    assert dashboard._compact_path("/Users/me", home="/Users/me") == "~"
+
+
+def test_shorten_path_token_keeps_tail():
+    """The path-token shortener must always preserve the last two segments
+    (filename + parent dir) even under aggressive budget pressure."""
+    out = dashboard._shorten_path_token("/a/b/c/d/e/f.py", 12)
+    assert out.endswith("e/f.py"), f"unexpected: {out!r}"
+    assert out.startswith("…/")
+    # Short paths pass through
+    assert dashboard._shorten_path_token("script.py", 80) == "script.py"
 
 
 def test_hot_procs_content_handles_empty():
