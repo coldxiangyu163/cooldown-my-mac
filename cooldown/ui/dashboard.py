@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 from dataclasses import asdict, is_dataclass
 from typing import Any
@@ -775,26 +776,94 @@ def _cli_panel(procs: list[procs_mod.ProcInfo]) -> Panel:
     return Panel(table, title=title, box=SIMPLE, border_style="yellow")
 
 
-def shorten_cmd(name: str, cmdline: str, width: int = 56) -> str:
-    """Pick the most informative tail of a long command line.
+def _compact_path(path: str, *, home: str) -> str:
+    """Collapse ``$HOME`` to ``~`` so paths stay informative but shorter.
 
-    For ``python /Users/.../script.py --flag value`` we want
-    ``python script.py --flag value``, not ``/opt/homebrew/Cellar/python@3.14``.
+    Why not strip to basename like the old implementation: when three
+    different `python script.py` invocations show up in the Hot Processes
+    panel, basename-only renders them as identical rows. Keeping the
+    project segments is what makes them distinguishable.
+    """
+    if home and (path == home or path.startswith(home + "/")):
+        return "~" + path[len(home):]
+    return path
+
+
+def _shorten_path_token(path: str, max_len: int) -> str:
+    """Compress one path token by dropping leading segments.
+
+    ``/a/b/c/d/e/f.py`` with budget 12 → ``…/e/f.py``. Never strips
+    fewer than the last two segments, so the script's parent directory
+    (which usually identifies the project) survives even under pressure.
+    """
+    if len(path) <= max_len:
+        return path
+    segs = path.split("/")
+    if len(segs) <= 2:
+        return path  # nothing to compress (e.g. "script.py")
+    # Walk from the tail outward, growing the kept suffix until it would
+    # overflow. Always keep at least the last 2 segments.
+    keep = 2
+    while keep < len(segs):
+        candidate = "…/" + "/".join(segs[-keep:])
+        if len(candidate) > max_len:
+            keep -= 1
+            break
+        keep += 1
+    keep = max(keep, 2)
+    return "…/" + "/".join(segs[-keep:])
+
+
+def shorten_cmd(name: str, cmdline: str, width: int = 56) -> str:
+    """Render a command line that stays informative under tight column budgets.
+
+    Two design rules:
+      1. Preserve the script-path *tail* — `python foo/script.py` and
+         `python bar/script.py` must look different in the table.
+      2. Drop only the interpreter prefix (the part before the first
+         space) down to its basename — that's the part that's reliably
+         long and uninformative (`/opt/homebrew/Cellar/python@3.14/.../Python`).
+
     Falls back to ``name`` when cmdline parsing leaves nothing useful.
     """
     parts = cmdline.split()
     if not parts:
         return name or "?"
     head = parts[0].rsplit("/", 1)[-1] or parts[0]
+
+    home = os.environ.get("HOME", "")
     rest_parts: list[str] = []
     for tok in parts[1:]:
-        # Strip long absolute paths to their basename for readability.
-        # Keep the leading flag indicator (``--``) intact.
-        if tok.startswith("/") and "/" in tok[1:]:
-            tok = tok.rsplit("/", 1)[-1]
+        if tok.startswith("/"):
+            tok = _compact_path(tok, home=home)
         rest_parts.append(tok)
     rest = " ".join(rest_parts)
     shown = f"{head} {rest}".strip() if rest else head
+
+    if len(shown) <= width:
+        return shown
+
+    # Over budget. The user picks rows by reading the *script* identity,
+    # so spend the budget on the tail end of the first absolute-ish path
+    # we find rather than truncating the whole string from the right
+    # (which would chop the script name and leave only `Python`).
+    target_idx: int | None = None
+    for i, tok in enumerate(rest_parts):
+        if "/" in tok:
+            target_idx = i
+            break
+    if target_idx is not None:
+        # Budget for the long path = total budget minus everything else.
+        other_len = (
+            len(head)
+            + (1 if rest_parts else 0)
+            + sum(len(t) + 1 for j, t in enumerate(rest_parts) if j != target_idx)
+        )
+        path_budget = max(8, width - other_len)
+        rest_parts[target_idx] = _shorten_path_token(rest_parts[target_idx], path_budget)
+        rest = " ".join(rest_parts)
+        shown = f"{head} {rest}".strip() if rest else head
+
     if len(shown) > width:
         shown = shown[: width - 1] + "…"
     return shown
