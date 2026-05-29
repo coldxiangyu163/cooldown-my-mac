@@ -80,6 +80,48 @@ def test_install_bootstrap_failure_reports_error(temp_home, monkeypatch):
     assert any("bootstrap failed" in m for m in outcome.messages)
 
 
+def test_install_retries_bootstrap_on_transient_eio(temp_home, monkeypatch):
+    """`launchctl bootout` settles asynchronously, so a fresh `bootstrap` can
+    hit EIO (error 5). The installer must back off and retry that transient
+    failure instead of giving up (the bug behind `cool daemon install`)."""
+    monkeypatch.setattr(installer_mod.time, "sleep", lambda _s: None)
+    attempts = {"bootstrap": 0}
+
+    def _fake_launchctl(args, check=False):
+        if args[0] == "bootstrap":
+            attempts["bootstrap"] += 1
+            if attempts["bootstrap"] == 1:
+                return _fake_cp(
+                    returncode=5,
+                    stderr="Bootstrap failed: 5: Input/output error",
+                )
+            return _fake_cp(0)
+        return _fake_cp(0)
+
+    monkeypatch.setattr(installer_mod, "_launchctl", _fake_launchctl)
+    outcome = installer_mod.install(executable="/usr/local/bin/cool")
+    assert outcome.ok is True
+    assert attempts["bootstrap"] >= 2  # retried past the transient EIO
+
+
+def test_install_does_not_retry_non_transient_error(temp_home, monkeypatch):
+    """A real bootstrap error (bad plist, etc.) must fail fast — no retry
+    storm on something a retry can't fix."""
+    monkeypatch.setattr(installer_mod.time, "sleep", lambda _s: None)
+    attempts = {"bootstrap": 0}
+
+    def _fake_launchctl(args, check=False):
+        if args[0] == "bootstrap":
+            attempts["bootstrap"] += 1
+            return _fake_cp(returncode=1, stderr="Service is disabled")
+        return _fake_cp(0)
+
+    monkeypatch.setattr(installer_mod, "_launchctl", _fake_launchctl)
+    outcome = installer_mod.install(executable="/usr/local/bin/cool")
+    assert outcome.ok is False
+    assert attempts["bootstrap"] == 1  # no retry on a non-transient failure
+
+
 def test_uninstall_removes_plist(temp_home, monkeypatch):
     monkeypatch.setattr(installer_mod, "_launchctl", lambda *a, **k: _fake_cp(0))
     # Create a plist to remove.

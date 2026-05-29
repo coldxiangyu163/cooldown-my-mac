@@ -33,6 +33,24 @@ reap:
   # Only fire when the overall severity reaches this level ("warn" or "critical").
   trigger_severity: critical
 
+# Auto-reap orphaned automation browsers (agent-browser / puppeteer /
+# playwright leftovers). Runs every tick independent of memory pressure:
+# leaked headless Chrome cooks the CPU/thermals even when RAM is fine. The
+# classifier never targets your real browser, but auto-killing is opt-in, so
+# this is disabled by default. The whole Chrome helper subtree is torn down.
+#
+# A leftover is reaped only when BOTH old AND quiet, so an in-progress session
+# is never killed mid-run no matter how long it has run. (The interactive
+# `cool reap --leftovers` has no CPU gate — there you decide.)
+leftovers:
+  enabled: false
+  # Staleness floor: only consider leftovers alive at least this long.
+  min_age_seconds: 1800
+  # Spare anything still working: skip leftovers using more than this percent
+  # of a SINGLE CPU core (machine-independent — a run pinning a full core reads
+  # ~100 on any Mac). Idle/abandoned leftovers sit near 0.
+  busy_cpu_percent: 10.0
+
 # Auto-run `sudo -n purge` to drop disk cache. Disabled by default because
 # it requires cached sudo credentials.
 purge:

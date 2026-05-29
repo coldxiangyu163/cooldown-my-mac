@@ -12,6 +12,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -19,6 +20,13 @@ from ..safety.oplog import record
 
 LABEL = "ai.cooldown.agent"
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "cooldown.plist"
+
+# `launchctl bootout` tears a service down asynchronously, so a `bootstrap`
+# fired immediately after can race the still-settling teardown and fail with
+# EIO (error 5). Back off and retry that transient failure rather than giving
+# up — a real error (bad plist, disabled service) is not retried.
+_BOOTSTRAP_RETRIES = 4
+_BOOTSTRAP_BACKOFF = 0.25  # seconds; grows linearly per attempt
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +128,32 @@ def _service_target() -> str:
     return f"{_domain_target()}/{LABEL}"
 
 
+def _is_transient_bootstrap_error(err: str) -> bool:
+    """A fresh bootout settling under us shows up as EIO (error 5). That clears
+    on retry; a bad/disabled plist does not, so only EIO is treated transient."""
+    e = err.lower()
+    return "input/output error" in e or ": 5:" in e
+
+
+def _bootstrap(target: Path) -> tuple[bool, str]:
+    """Bootstrap the agent, retrying past the transient bootout/bootstrap race.
+
+    Returns ``(ok, last_error)``. A non-transient failure (e.g. a disabled or
+    malformed service) fails fast without burning the retry budget.
+    """
+    last = ""
+    for attempt in range(_BOOTSTRAP_RETRIES):
+        r = _launchctl(["bootstrap", _domain_target(), str(target)])
+        if r.returncode == 0:
+            return True, ""
+        last = (r.stderr or r.stdout).strip()
+        if not _is_transient_bootstrap_error(last):
+            return False, last
+        if attempt < _BOOTSTRAP_RETRIES - 1:
+            time.sleep(_BOOTSTRAP_BACKOFF * (attempt + 1))
+    return False, last
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -178,9 +212,8 @@ def install(
         # Service wasn't loaded — fine.
         messages.append(f"bootout: {(bootout.stderr or bootout.stdout).strip() or 'not loaded'}")
 
-    bootstrap = _launchctl(["bootstrap", _domain_target(), str(target)])
-    if bootstrap.returncode != 0:
-        err = (bootstrap.stderr or bootstrap.stdout).strip()
+    ok, err = _bootstrap(target)
+    if not ok:
         messages.append(f"bootstrap failed: {err}")
         record("daemon.install", ok=False, plist=str(target), error=err)
         return InstallOutcome(ok=False, plist_path=target, messages=messages)

@@ -194,40 +194,75 @@ def test_shorten_path_token_keeps_tail():
     assert dashboard._shorten_path_token("script.py", 80) == "script.py"
 
 
-def test_hot_procs_content_handles_empty():
-    """Empty TOP-N must render a friendly empty-state row, not crash."""
-    tbl = dashboard.hot_procs_content([], ncpu=10)
-    # Rich Tables expose .row_count after rows are added.
+def test_group_key_collapses_app_bundle():
+    """The .app bundle name is the grouping key (collapses Chrome's helper
+    fleet); leftmost bundle wins for nested helpers; non-.app falls back to
+    the process name."""
+    assert hot_mod.group_key(
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "", "Google Chrome"
+    ) == "Google Chrome"
+    assert hot_mod.group_key(
+        "", "/Applications/Visual Studio Code.app/x/Code Helper.app/y", "Code Helper"
+    ) == "Visual Studio Code"
+    assert hot_mod.group_key("", "", "python3.13") == "python3.13"
+
+
+def test_aggregate_by_app_cores_and_coverage():
+    """``cores`` is Σraw/100 and ``pct_sys`` is Σ(normalized); the tail the
+    cut hides is reported so the panel can stay honest."""
+    procs = [
+        hot_mod.HotProc(
+            pid=i, name="Google Chrome", cmdline="x", cpu_percent=5.0, rss=10,
+            user="u", create_time=0.0, age=1.0,
+            exe="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        )
+        for i in range(3)
+    ]
+    procs.append(
+        hot_mod.HotProc(
+            pid=99, name="node", cmdline="node x", cpu_percent=2.0, rss=5,
+            user="u", create_time=0.0, age=1.0, exe="/usr/bin/node",
+        )
+    )
+    apps, cov = hot_mod.aggregate_by_app(procs, ncpu=10, top_n=1)
+    assert apps[0].app == "Google Chrome"
+    assert apps[0].nproc == 3
+    assert abs(apps[0].cores - 1.5) < 1e-9  # 15% * 10 / 100
+    assert abs(apps[0].pct_sys - 15.0) < 1e-9
+    # top_n=1 pushes node into the hidden tail.
+    assert cov.tail_nproc == 1
+    assert abs(cov.tail_pct_sys - 2.0) < 1e-9
+    assert abs(cov.total_pct_sys - 17.0) < 1e-9
+
+
+def test_hot_apps_content_handles_empty():
+    """Empty groups must render a friendly empty-state row, not crash."""
+    tbl = dashboard.hot_apps_content([])
     assert tbl.row_count == 1
 
 
-def test_hot_procs_content_paints_runaway_red():
-    """A process at >= 80% of a single core (i.e. cpu_percent * ncpu >= 80)
-    must render with the bold-red severity colour. This is the whole
-    reason the panel exists — to make runaways visually obvious."""
-    rows = [
-        hot_mod.HotProc(
-            pid=42, name="py", cmdline="python doctor.py",
-            cpu_percent=9.5,  # 9.5% of 10-core machine = 95% of one core
-            rss=1_000_000, user="u", create_time=0.0, age=10.0,
-        ),
-    ]
-    tbl = dashboard.hot_procs_content(rows, ncpu=10)
-    # Render to a plain string and look for the markup. We use a console
-    # in non-color, no-soft-wrap mode so the assertion isn't affected by
-    # whatever terminal pytest runs under.
+def test_hot_apps_content_paints_runaway_red():
+    """A group eating >= 0.8 cores must render the cores cell bold-red — the
+    whole reason the panel exists is to make runaways visually obvious."""
+    proc = hot_mod.HotProc(
+        pid=42, name="py", cmdline="python doctor.py",
+        cpu_percent=9.5,  # 9.5% of a 10-core box = 0.95 cores
+        rss=1_000_000, user="u", create_time=0.0, age=10.0,
+    )
+    apps, _ = hot_mod.aggregate_by_app([proc], ncpu=10, top_n=8)
+    tbl = dashboard.hot_apps_content(apps)
     from io import StringIO
 
     from rich.console import Console
     buf = StringIO()
     Console(file=buf, force_terminal=True, color_system="truecolor", width=200).print(tbl)
     rendered = buf.getvalue()
-    # The cpu% column should be there; we don't pin the exact ANSI bytes,
-    # just the number.
+    # The group renders with its %sys share and the runaway cores cell is
+    # painted bold-red (ANSI SGR 1;31) — we don't pin exact bytes, just that
+    # red is emitted for a >= 0.8-core group.
     assert "9.5" in rendered
-    # cmdline starts with "python", so the shortener keeps "python doctor.py"
-    # (not "py doctor.py") — the name field is only used as fallback.
-    assert "python doctor.py" in rendered
+    assert "py" in rendered
+    assert "\x1b[1;31m" in rendered
 
 
 def test_render_json_includes_hot_procs():

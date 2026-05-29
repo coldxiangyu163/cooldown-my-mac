@@ -60,6 +60,7 @@ from ..collectors import battery as batt_mod
 from ..collectors import dev as dev_mod
 from ..collectors import hostinfo as host_mod
 from ..collectors import hot_procs as hot_mod
+from ..collectors import leftovers as leftovers_mod
 from ..collectors import memory as mem_mod
 from ..collectors import ports as ports_mod
 from ..collectors import procs as procs_mod
@@ -99,18 +100,44 @@ class ProjectRow:
 
 
 @dataclass
-class HotRow:
-    """One row of the live "Hot Processes by CPU%" panel.
+class HotMemberRow:
+    """One process inside a Hot-by-app group (shown when expanded)."""
 
-    Mirrors ``hot_procs.HotProc`` but pre-shapes the display strings so the
-    fast-tick callback can hand them to the DataTable directly.
-    """
     pid: int
-    cpu_percent: float  # normalized share of total CPU (matches ProcInfo)
+    cores: float  # this process's own core-equivalent (raw / 100)
+    pct_sys: float  # share of total CPU capacity
     rss: int
     age: float
-    user: str
     cmd: str
+
+
+@dataclass
+class HotAppRow:
+    """One application row of the live "Hot Processes by CPU%" panel."""
+
+    app: str
+    cores: float  # how many cores the whole app is eating
+    pct_sys: float
+    nproc: int
+    rss: int
+    pids: list[int]
+    origin_label: str  # "" or e.g. "⚠ agent-browser leftover" for AI leftovers
+    members: list[HotMemberRow]
+
+
+def _rj(value: str) -> Text:
+    return Text.from_markup(value, justify="right")
+
+
+def _cores_color(cores: float) -> str:
+    """Colour by core-equivalent, matching the old per-core 80/40 rule
+    (cores 0.8 / 0.4) so `cool watch` and `cool status` light up runaways
+    identically."""
+    if cores >= 0.8:
+        return "bold red"
+    if cores >= 0.4:
+        return "yellow"
+    return "green"
 
 
 @dataclass
@@ -143,18 +170,36 @@ def build_ai_rows(procs: list[ProcInfo], limit: int = 20) -> list[AiRow]:
     return out[:limit]
 
 
-def build_hot_rows(rows: list[hot_mod.HotProc], limit: int = 8) -> list[HotRow]:
-    """Adapt ``hot_procs.HotProc`` instances into the DataTable's row shape."""
-    out: list[HotRow] = []
-    for h in rows[:limit]:
+def build_hot_app_rows(
+    apps: list[hot_mod.HotApp], ncpu: int, member_limit: int = 12
+) -> list[HotAppRow]:
+    """Adapt aggregated ``hot_procs.HotApp`` groups into the panel's row
+    shape, pre-shaping each group's top members for drill-down."""
+    ncpu = max(1, ncpu)
+    out: list[HotAppRow] = []
+    for a in apps:
+        members = [
+            HotMemberRow(
+                pid=m.pid,
+                cores=m.cpu_percent * ncpu / 100.0,
+                pct_sys=m.cpu_percent,
+                rss=m.rss,
+                age=m.age,
+                cmd=dashboard_ui.shorten_cmd(m.name, m.cmdline, width=40),
+            )
+            for m in a.procs[:member_limit]
+        ]
+        label = f"⚠ {a.origin.tool} leftover" if a.origin else ""
         out.append(
-            HotRow(
-                pid=h.pid,
-                cpu_percent=h.cpu_percent,
-                rss=h.rss,
-                age=h.age,
-                user=h.user,
-                cmd=dashboard_ui.shorten_cmd(h.name, h.cmdline, width=48),
+            HotAppRow(
+                app=a.app,
+                cores=a.cores,
+                pct_sys=a.pct_sys,
+                nproc=a.nproc,
+                rss=a.rss,
+                pids=list(a.pids),
+                origin_label=label,
+                members=members,
             )
         )
     return out
@@ -631,7 +676,13 @@ def _build_app_class():
             self._ai_rows: list[AiRow] = []
             self._project_rows: list[ProjectRow] = []
             self._port_rows: list[PortRow] = []
-            self._hot_rows: list[HotRow] = []
+            self._hot_apps: list[HotAppRow] = []
+            self._hot_cov: hot_mod.Coverage | None = None
+            # Visible-row map: each table row is a group or a member.
+            # ``_targets_for`` and the expand handler index into it.
+            self._hot_visible: list[tuple[str, HotAppRow | HotMemberRow | None]] = []
+            # App names the user has expanded; persists across ticks.
+            self._hot_expanded: set[str] = set()
             # Per-panel "last updated" epoch.
             self._updated: dict[str, float] = {}
             # Rolling trend buffers for the CPU / Memory sparklines (last
@@ -717,12 +768,13 @@ def _build_app_class():
                 _h("launchers"),
             )
             hot: DataTable = self.query_one("#hot", DataTable)
-            # cpu% is the lead — it's the reason this panel exists. cmd
-            # lives at the right so a 1-row scan reads "this PID at this %
-            # is running this command".
+            # "cores" leads — "Chrome is eating 13 cores" is the legible
+            # unit. %sys keeps the old normalized share so the row still
+            # reconciles with the CPU panel's total. note carries the
+            # leftover/origin flag or the hottest member's command.
             hot.add_columns(
-                _hr("pid"), _hr("cpu%"), _hr("rss"),
-                _hr("age"), _h("user"), _h("cmd"),
+                _h("app"), _hr("cores"), _hr("%sys"),
+                _hr("procs"), _hr("rss"), _h("note"),
             )
             ports: DataTable = self.query_one("#ports", DataTable)
             ports.add_columns(
@@ -771,8 +823,13 @@ def _build_app_class():
 
         # ---------------------------------------------------------- collectors
         def _gather_fast(self) -> None:
+            # ncpu drives the cores math for the Hot-by-app panel; seed it
+            # from this tick's sample (falls back to 1 if CPU collection
+            # fails so aggregation still runs, just under-counted for a tick).
+            ncpu = 1
             try:
                 sys_stats = sys_mod.collect(cpu_sample=0.2)
+                ncpu = sys_stats.cpu_count_logical or 1
                 self.call_from_thread(self._apply_cpu, sys_stats)
             except Exception as exc:  # noqa: BLE001
                 log.exception("watch fast-tick: cpu collector failed")
@@ -808,9 +865,15 @@ def _build_app_class():
                 # ``cool watch`` shares a fast tick budget across collectors;
                 # use a shorter sample window than `cool status`'s 0.3 s so
                 # the 3 s tick doesn't get dominated by a single sleep.
-                hot_raw = hot_mod.collect(top_n=8, sample_interval=0.15)
-                hot_rows = build_hot_rows(hot_raw)
-                self.call_from_thread(self._apply_hot, hot_rows)
+                # top_n=None → every non-zero proc, so aggregation sees the
+                # whole tail and the coverage line stays honest.
+                hot_raw = hot_mod.collect(sample_interval=0.15)
+                apps, cov = hot_mod.aggregate_by_app(
+                    hot_raw, ncpu, top_n=20, key_fn=leftovers_mod.browser_aware_key
+                )
+                leftovers_mod.annotate_origins(apps)
+                hot_rows = build_hot_app_rows(apps, ncpu)
+                self.call_from_thread(self._apply_hot, hot_rows, cov)
             except Exception as exc:  # noqa: BLE001
                 log.exception("watch fast-tick: hot_procs collector failed")
                 self.call_from_thread(self._set_table_error, "hot", exc)
@@ -933,54 +996,84 @@ def _build_app_class():
             t.border_subtitle = "[dim]k to kill kind[/]"
             self._refresh_subtitle()
 
-        def _apply_hot(self, rows: list[HotRow]) -> None:
-            """Render the Hot Processes table. Runs on the main thread."""
-            self._hot_rows = rows
+        def _apply_hot(self, rows: list[HotAppRow], cov: hot_mod.Coverage) -> None:
+            """Store the latest Hot-by-app data, then render. Main thread."""
+            self._hot_apps = rows
+            self._hot_cov = cov
             self._updated["hot"] = time.time()
+            self._render_hot_table()
+
+        def _render_hot_table(self) -> None:
+            """Build the #hot table from ``_hot_apps`` honouring the expand
+            set. Split out from ``_apply_hot`` so the expand toggle can
+            re-render without re-collecting."""
             t: DataTable = self.query_one("#hot", DataTable)
+            prev = t.cursor_row if t.row_count else 0
             t.clear()
+            self._hot_visible = []
 
-            def _rj(value: str) -> Text:
-                return Text.from_markup(value, justify="right")
-
-            if not rows:
+            if not self._hot_apps:
                 t.add_row(
-                    "[dim]–[/]",
-                    "[dim italic]idle[/]",
-                    "[dim]–[/]",
-                    "[dim]–[/]",
-                    "[dim]–[/]",
+                    "[dim]–[/]", "[dim italic]idle[/]", "[dim]–[/]",
+                    "[dim]–[/]", "[dim]–[/]",
                     "[dim italic]nothing burning CPU right now[/]",
                 )
                 t.border_title = "Hot Processes by CPU%"
                 t.border_subtitle = "[dim]empty[/]"
                 return
 
-            # Reuse the dashboard's per-core threshold so `cool status` and
-            # `cool watch` light up runaways with the same colour rule.
-            ncpu = self._sys.cpu_count_logical if self._sys else 1
-            for row in rows:
-                per_core = row.cpu_percent * max(1, ncpu)
-                if per_core >= 80:
-                    cpu_clr = "bold red"
-                elif per_core >= 40:
-                    cpu_clr = "yellow"
-                else:
-                    cpu_clr = "green"
+            for app in self._hot_apps:
+                expanded = app.app in self._hot_expanded
+                caret = "▾" if expanded else ("▸" if app.members else " ")
+                name = f"[yellow]⚠[/] {app.app}" if app.origin_label else app.app
+                # note carries only the leftover flag; per-process commands
+                # live in the expandable member rows below.
+                note = f"[yellow]{app.origin_label}[/]" if app.origin_label else ""
+                self._hot_visible.append(("group", app))
                 t.add_row(
-                    _rj(str(row.pid)),
-                    _rj(f"[{cpu_clr}]{row.cpu_percent:.1f}[/]"),
-                    _rj(human_bytes(row.rss)),
-                    _rj(human_duration(row.age)),
-                    (row.user or "")[:10],
-                    row.cmd,
+                    f"{caret} {name}",
+                    _rj(f"[{_cores_color(app.cores)}]{app.cores:.1f}[/]"),
+                    _rj(f"{app.pct_sys:.1f}%"),
+                    _rj(str(app.nproc)),
+                    _rj(human_bytes(app.rss)),
+                    note,
                 )
-            total = sum(r.cpu_percent for r in rows)
+                if expanded:
+                    for m in app.members:
+                        self._hot_visible.append(("member", m))
+                        t.add_row(
+                            f"   ↳ {m.pid}",
+                            _rj(f"[{_cores_color(m.cores)}]{m.cores:.2f}[/]"),
+                            _rj(f"{m.pct_sys:.1f}%"),
+                            _rj("·"),
+                            _rj(human_bytes(m.rss)),
+                            f"{m.cmd} · {human_duration(m.age)}",
+                        )
+
+            syspct = self._sys.cpu_percent if self._sys else 0.0
+            cov = self._hot_cov
+            shown = cov.shown_pct_sys if cov else 0.0
+            tail = cov.tail_pct_sys if cov else 0.0
+            tail_n = cov.tail_nproc if cov else 0
             t.border_title = (
-                f"Hot Processes by CPU%  [dim]· {len(rows)} shown · "
-                f"{total:.1f}% total[/]"
+                f"Hot Processes by CPU%  [dim]· {syspct:.0f}% busy · shown {shown:.0f}%"
+                f" · +{tail_n} more {tail:.0f}%[/]"
             )
-            t.border_subtitle = "[dim]k to kill pid[/]"
+            t.border_subtitle = "[dim]enter expand · k kill[/]"
+            if t.row_count:
+                t.move_cursor(row=min(prev, t.row_count - 1))
+
+        def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+            """Enter / click on a group toggles its expanded member list."""
+            if event.data_table.id != "hot":
+                return
+            idx = event.data_table.cursor_row
+            if not 0 <= idx < len(self._hot_visible):
+                return
+            kind, obj = self._hot_visible[idx]
+            if kind == "group" and isinstance(obj, HotAppRow) and obj.members:
+                self._hot_expanded.symmetric_difference_update({obj.app})
+                self._render_hot_table()
 
         def _apply_projects(self, rows: list[ProjectRow]) -> None:
             self._project_rows = rows
@@ -1097,7 +1190,8 @@ def _build_app_class():
             footer stays scannable without orphaning the advanced keys."""
             lines = [
                 "[bold]Refresh[/]  r · R (slow)",
-                "[bold]Tables[/]   1 AI  ·  2 Projects  ·  3 Ports",
+                "[bold]Tables[/]   1 AI  ·  2 Projects  ·  3 Ports  ·  4 Hot",
+                "[bold]Hot[/]      enter expand app → PIDs",
                 "[bold]Kill[/]     k SIGTERM  ·  K SIGKILL",
                 "[bold]Tick[/]     + / -  fast ±1s   ·   [ / ]  slow ±5s",
                 "[bold]Mode[/]     p Pause   ·   d Dry-run",
@@ -1229,13 +1323,20 @@ def _build_app_class():
                         return []
                     pid_set = set(row.pids)
                     return [p for p in self._procs if p.pid in pid_set]
-            elif table_id == "hot" and 0 <= row_idx < len(self._hot_rows):
-                hot_row = self._hot_rows[row_idx]
-                # One row = one PID for Hot Processes (unlike the AI / project
-                # tables that aggregate). The cmd shown in the table is what
-                # the user just visually confirmed they want gone, so plumb
-                # it through verbatim for the oplog audit trail.
-                return [_synth_procinfo(hot_row.pid, "hot", hot_row.cmd)]
+            elif table_id == "hot" and 0 <= row_idx < len(self._hot_visible):
+                kind, obj = self._hot_visible[row_idx]
+                if kind == "group" and isinstance(obj, HotAppRow):
+                    # A group row signals every PID in the app (same multi-PID
+                    # pattern as the AI Inventory). The dry-run preview spells
+                    # out the count before anything dies. A group flagged as an
+                    # automation-browser leftover (origin_label set) is killed as
+                    # kind 'automation-browser' so reap.terminate expands the
+                    # Chrome helper subtree instead of leaving idle helpers alive.
+                    target_kind = "automation-browser" if obj.origin_label else "hot-app"
+                    return [_synth_procinfo(pid, target_kind, obj.app) for pid in obj.pids]
+                if kind == "member" and isinstance(obj, HotMemberRow):
+                    return [_synth_procinfo(obj.pid, "hot", obj.cmd)]
+                return []
             elif table_id == "projects" and 0 <= row_idx < len(self._project_rows):
                 row = self._project_rows[row_idx]
                 # Rebuild lightweight ProcInfo records for the pids.

@@ -19,6 +19,11 @@ def test_defaults_validate():
     assert c.purge.enabled is False
     assert c.notify.enabled is True
     assert c.notify.cooldown_seconds == 300
+    # Leftovers auto-reap is opt-in (safety): off by default, 30 min staleness,
+    # and only reaps quiet (low-CPU) leftovers so an active session is spared.
+    assert c.leftovers.enabled is False
+    assert c.leftovers.min_age_seconds == 1800
+    assert c.leftovers.busy_cpu_percent == pytest.approx(10.0)
     assert c.thresholds.ram_warn == pytest.approx(0.80)
     assert c.dry_run is False
     # log_dir should be expanded to an absolute home-rooted path.
@@ -50,6 +55,9 @@ def test_yaml_round_trip(tmp_path: Path):
     assert loaded.reap.ai_idle_seconds == 1800
     assert loaded.purge.enabled is False
     assert loaded.notify.enabled is True
+    assert loaded.leftovers.enabled is False
+    assert loaded.leftovers.min_age_seconds == 1800
+    assert loaded.leftovers.busy_cpu_percent == pytest.approx(10.0)
 
 
 def test_write_default_refuses_overwrite(tmp_path: Path):

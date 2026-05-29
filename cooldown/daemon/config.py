@@ -51,6 +51,32 @@ class ReapRule(BaseModel):
     trigger_severity: TriggerSeverity = "critical"
 
 
+class LeftoversRule(BaseModel):
+    """Auto-reap orphaned automation browsers (agent-browser / puppeteer /
+    playwright). Opt-in: the classifier never targets the real browser, but
+    autonomous killing should be a deliberate choice. Runs every tick
+    independent of memory pressure — leaked headless Chrome cooks the CPU and
+    thermals even when RAM is fine.
+
+    A leftover is reaped only when it is BOTH old (alive >= ``min_age_seconds``)
+    AND quiet (single-core CPU% <= ``busy_cpu_percent``). The CPU gate is the
+    real safety net: an in-progress session pinning a core is spared no matter
+    how long it has run, so the autonomous daemon only sweeps the idle pile-up.
+    The interactive ``cool reap --leftovers`` has no CPU gate — there the user
+    decides."""
+
+    enabled: bool = False
+    # Reap only leftovers that have been alive at least this long (staleness
+    # floor). This is process age, not inactivity — the CPU gate below is what
+    # protects an active session.
+    min_age_seconds: int = Field(default=1800, ge=0)
+    # Spare anything still working: an automation browser using more than this
+    # percent of a SINGLE CPU core is an in-progress session and never
+    # auto-reaped. Judged per core (machine-independent), so a run pinning a
+    # full core reads ~100 on any Mac; idle/abandoned leftovers sit near 0.
+    busy_cpu_percent: float = Field(default=10.0, ge=0.0)
+
+
 class PurgeRule(BaseModel):
     enabled: bool = False
     trigger_severity: TriggerSeverity = "critical"
@@ -66,6 +92,7 @@ class DaemonConfig(BaseModel):
     interval_seconds: int = Field(default=60, ge=1)
     thresholds: ThresholdsConfig = Field(default_factory=ThresholdsConfig)
     reap: ReapRule = Field(default_factory=ReapRule)
+    leftovers: LeftoversRule = Field(default_factory=LeftoversRule)
     purge: PurgeRule = Field(default_factory=PurgeRule)
     notify: NotifyRule = Field(default_factory=NotifyRule)
     dry_run: bool = False

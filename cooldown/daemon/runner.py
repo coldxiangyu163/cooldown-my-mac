@@ -18,10 +18,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import psutil
+
 from ..actions import notify as notify_mod
 from ..actions import purge as purge_mod
 from ..actions.pressure import Severity, Thresholds, evaluate
 from ..actions.reap import terminate
+from ..collectors import leftovers as leftovers_mod
 from ..collectors import memory as mem_mod
 from ..collectors import procs as procs_mod
 from ..safety.oplog import record
@@ -237,6 +240,46 @@ def run_once(cfg: DaemonConfig, *, log: logging.Logger | None = None) -> dict[st
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.error("purge-failed %s", exc)
+
+    # --- leftovers rule -----------------------------------------------------
+    # Independent of memory pressure on purpose: leaked headless Chrome from
+    # agent-browser / puppeteer / playwright piles up and cooks the CPU and
+    # thermals even when RAM is fine, so this fires every tick when enabled.
+    if cfg.leftovers.enabled:
+        try:
+            items = leftovers_mod.collect(leak_age_seconds=cfg.leftovers.min_age_seconds)
+            # The browser branch flags automation Chrome at any age. Reap only
+            # what is BOTH old AND quiet: age alone is process lifetime, not
+            # inactivity, so a busy session — an in-progress scrape or agent
+            # task — is spared no matter how long it has run.
+            #
+            # "Quiet" is judged per CPU CORE, not as a share of the whole
+            # machine. The collector normalizes cpu_percent to raw/ncpu, so a
+            # single-threaded session pinning one full core reads as 100/ncpu —
+            # tiny on a many-core Mac and wrongly "idle". Multiply ncpu back out
+            # so ``busy_cpu_percent`` means single-core utilization (a full core
+            # ~= 100), machine-independent.
+            ncpu = psutil.cpu_count(logical=True) or 1
+            stale = [
+                p
+                for p in items
+                if p.age >= cfg.leftovers.min_age_seconds
+                and p.cpu_percent * ncpu <= cfg.leftovers.busy_cpu_percent
+            ]
+            if stale:
+                outcomes = terminate(stale, dry_run=cfg.dry_run)
+                ok = sum(1 for o in outcomes if o.ok)
+                summary["actions"].append(f"leftovers({ok}/{len(outcomes)})")
+                record(
+                    "daemon.leftovers",
+                    count=len(outcomes),
+                    ok=ok,
+                    dry_run=cfg.dry_run,
+                )
+            else:
+                summary["actions"].append("leftovers(0)")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("leftovers-failed %s", exc)
 
     # --- persist & log ------------------------------------------------------
     state.last_severity = verdict.severity.value
