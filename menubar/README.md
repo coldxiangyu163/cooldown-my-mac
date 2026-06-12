@@ -1,8 +1,8 @@
 # Coolant · cooldown-my-mac 菜单栏 App
 
-> Your Mac, read like a cockpit — one ring tells the truth, and you reach into it to fire.
+> Your Mac, read like a cockpit — one snowflake tells the truth, and you reach into it to act.
 
-一个原生 SwiftUI 菜单栏应用，是 `cool` CLI 的「第一眼」表现层：常驻菜单栏一个**健康分环 + 温度**，点开是一张毛玻璃下拉面板，把 `cool status` 的全部信号——健康 / CPU / 内存 / 电池 / 诊断 / 核心负载 / AI CLI 家族 / 项目占用 / 热进程——按信息密度优先的卡片语言组织起来，并能一键回收 / 清理。
+一个原生 SwiftUI 菜单栏应用，是 `cool` CLI 的「第一眼」表现层：常驻菜单栏一片**雪花 + 温度**，点开是一张毛玻璃下拉面板，把 `cool status` 的全部信号——健康 / CPU / 内存 / 电池 / 诊断 / 核心负载 / AI CLI 家族 / 项目占用 / 热进程——按信息密度优先的卡片语言组织起来，并能一键回收 / 清理。
 
 数据层**不重复造轮子**：菜单栏只负责画图，所有采集都 shell out 调用 `cool ... --json`，所以它与终端里的 `cool status` / `cool watch` 永远不会读数打架。
 
@@ -10,7 +10,7 @@
 
 ## 看点
 
-- **常驻信号**：菜单栏一个健康环 + 紧凑温度数字。健康时渲染成**单色 template 图标**，由系统适配深浅菜单栏、安静得像一只时钟；只有真出问题（pressure critical / thermal warning / 单核 ≥80% on fire / 电池 ≥45°C）才上色变红。
+- **常驻信号**：菜单栏一片雪花 + 紧凑温度数字。健康时渲染成**单色 template 图标**，由系统适配深浅菜单栏、安静得像一只时钟；只有真出问题（pressure critical / thermal warning / 单核 ≥80% on fire / 电池 ≥45°C）才上色变红。
 - **现状 hero 卡**：特大号 AI 进程数 + 内存占用一句话归因，数字与卡片渐变跟随健康档位变色（calm 冷色 / warn 琥珀 / critical 红）——颜色是信号，不是装饰。
 - **诊断直达处置**：CPU 烤机 / 可回收闲置 / 内存大户 / 内存压力等徽章，能修的一点即达（kill / reap / purge），不能修的只陈述事实；扣分权重与 `cool` 的 `health_score` 完全一致。
 - **指标 + 核心负载**：健康 / CPU / 内存 / 电池四枚指标条，**只有越过各自阈值的那枚**染琥珀/红；每颗核心一根负载柱，峰值核心单独标注。
@@ -65,7 +65,6 @@ menubar/
       RenderShot.swift               # ImageRenderer 截图
     Views/
       Theme.swift                    # 配色（深浅自适应）/ 字体 / 阈值 / KIND_COLORS / health_score 扣分（CLI 平价）
-      Gauges.swift                   # HealthRing（菜单栏图标环）
       Components.swift               # 里程表数字 / 进度条 / 格式化 / shorten_cmd
       RichSections.swift             # hero 现状卡 / 指标条 / 诊断徽章 / 核心负载 / 排行条
       Sections.swift                 # 热进程 / 行动页脚 + Status 派生指标

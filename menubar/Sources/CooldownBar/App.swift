@@ -140,28 +140,27 @@ final class StatusStore {
         }
     }
 
-    // Render the colored ring + temperature to an NSImage HERE (main actor, but
+    // Render the snowflake + temperature to an NSImage HERE (main actor, but
     // outside any view-graph update) so the menu bar label never runs an
     // ImageRenderer inside its own body — that re-enters AppKit's constraint
     // cycle and can crash when the popover window lays out.
     private func updateBarImage() {
         let hasStatus = status != nil
-        // Before the first sample lands (~8s), show a calm full gray ring rather
-        // than an empty arc or the fallback symbol.
-        let frac = hasStatus ? Double(status!.healthScore) / 100 : 1.0
         // Calm (and pre-sample) renders monochrome as a template image so the
         // system tints it for light/dark menu bars; in template mode only the
         // alpha channel matters, so hierarchy is expressed via black + opacity.
         // Only warn/critical/onFire earns a colored, non-template image.
+        // Pre-sample (~8s) shows the snowflake dimmed rather than a fallback symbol.
         let template = barIsCalm
-        let ringColor: Color = template
+        let iconColor: Color = template
             ? .black.opacity(hasStatus ? 1.0 : 0.45)
             : barColor
         let textColor: Color = template ? .black.opacity(0.62) : Color(nsColor: .secondaryLabelColor)
 
         let content = HStack(spacing: 3) {
-            HealthRing(fraction: frac, color: ringColor, lineWidth: 2)
-                .frame(width: 14, height: 14)
+            Image(systemName: "snowflake")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(iconColor)
             if let t = glanceTemp.map({ Int($0.rounded()) }) {
                 Text("\(t)")
                     .font(.system(size: 11, design: .monospaced))
@@ -223,10 +222,10 @@ struct CooldownApp: App {
     }
 }
 
-// Ring + temperature in the menu bar. MenuBarExtra renders a SwiftUI label as
-// a template image (monochrome); when calm we lean into that (template NSImage,
-// system-tinted), but to keep accent color on warn/critical the image must stay
-// non-template and be presented with .original rendering.
+// Snowflake + temperature in the menu bar. MenuBarExtra renders a SwiftUI label
+// as a template image (monochrome); when calm we lean into that (template
+// NSImage, system-tinted), but to keep accent color on warn/critical the image
+// must stay non-template and be presented with .original rendering.
 struct BarLabel: View {
     let store: StatusStore
 
@@ -236,7 +235,7 @@ struct BarLabel: View {
                 .renderingMode(img.isTemplate ? .template : .original)
                 .accessibilityLabel(axLabel)
         } else {
-            Image(systemName: "thermometer.medium")
+            Image(systemName: "snowflake")
                 .accessibilityLabel(axLabel)
         }
     }

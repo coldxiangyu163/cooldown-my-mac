@@ -222,7 +222,7 @@ rules:
 
 When you don't want to open a terminal, `cool` now has a face too — a native SwiftUI menu bar app, **Coolant** (under [`menubar/`](./menubar/)).
 
-- **Glanceable**: a health ring plus CPU/battery temperature in the menu bar. While healthy it stays a quiet monochrome template icon; it only takes on color (red) when something is actually wrong — thermal warning, critical memory pressure, a core on fire.
+- **Glanceable**: a snowflake plus CPU/battery temperature in the menu bar. While healthy it stays a quiet monochrome template icon; it only takes on color (red) when something is actually wrong — thermal warning, critical memory pressure, a core on fire.
 - **A frosted-glass instrument cluster on click**: a hero status card (AI process count + memory footprint, with a gradient that tracks the health band), health/CPU/memory/battery chips, tappable diagnosis badges (runaway CPU / reapable sessions / memory pressure — each one tap from its fix), a per-core load chart, AI-CLI family and per-project rankings, and a hot-process list. One-tap reap idle AI / purge / open `cool watch`, with every destructive action behind a confirm chip. Fully light/dark adaptive; the last sample is cached to disk so the popover opens instantly.
 - **Same source of truth**: the bar only draws; every reading is shelled out from `cool ... --json`, so colors and thresholds always match `cool watch`.
 
