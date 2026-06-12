@@ -85,14 +85,22 @@ extension Status {
         return Array(out.prefix(6))
     }
 
-    /// A witty, data-driven real-world comparison for the AI memory footprint.
-    var wittyLine: String {
-        let gb = Double(totalAIRSS) / 1_073_741_824
-        let tabs = max(1, Int(Double(totalAIRSS) / 1_048_576 / 100))   // ~100 MB per Chrome tab
-        if gb >= 1 {
-            return "≈ 同时开 \(tabs) 个 Chrome 标签 🐘 · 够风扇响一整天 🌀"
+    /// The most useful next step for the AI footprint, quantified — answers
+    /// "so what do I do about it?" and never jokes against the data.
+    var insightLine: String {
+        let idle = procs.filter { p in
+            guard let k = p.kind, AI_KINDS.contains(k) else { return false }
+            return (p.idleSeconds ?? 0) > 1800
         }
-        return "还算克制 · 风扇暂时安静 🍃"
+        if !idle.isEmpty {
+            let idleRSS = idle.reduce(Int64(0)) { $0 + ($1.rss ?? 0) }
+            return idleRSS > 0
+                ? "其中 \(idle.count) 个会话闲置超 30 分钟 · 回收可释放 \(Fmt.bytes(idleRSS))"
+                : "其中 \(idle.count) 个会话闲置超 30 分钟 · 可回收"
+        }
+        guard memory.total > 0 else { return "全部会话都在活跃使用" }
+        let pct = Int((Double(totalAIRSS) / Double(memory.total) * 100).rounded())
+        return "占全机内存 \(pct)% · 全部在活跃使用，无可回收"
     }
 }
 
@@ -129,7 +137,7 @@ struct HeroCard: View {
                 }
                 Text("\(Fmt.bytes(s.totalAIRSS)) 被 AI / MCP 进程吃掉")
                     .font(Theme.text(13, .medium)).foregroundStyle(.primary)
-                Text("💡 \(s.wittyLine)")
+                Text(s.insightLine)
                     .font(Theme.text(11)).foregroundStyle(.secondary).lineLimit(2)
             }
             .padding(14)
