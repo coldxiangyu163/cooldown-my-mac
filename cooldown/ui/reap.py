@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ..actions.reap import terminate
+from ..collectors import leftovers as leftovers_mod
 from ..collectors import procs as procs_mod
 from ..safety.confirm import confirm
 from ..util import human_bytes, human_duration
@@ -41,16 +42,26 @@ def run(
     force: bool = False,
     assume_yes: bool = False,
     kinds: list[str] | None = None,
+    leftovers: bool = False,
 ) -> int:
+    # Orphaned automation browsers (agent-browser / puppeteer / playwright)
+    # are neither AI CLIs nor multiplexers, so they only join the candidate
+    # set when explicitly asked for via --leftovers or --kind automation-browser.
+    want_leftovers = leftovers or bool(
+        kinds and "automation-browser" in {k.lower() for k in kinds}
+    )
     with console.status("[dim]scanning for idle sessions...[/]", spinner="dots"):
         procs = procs_mod.collect()
         procs_mod.enrich_idle(procs)
+        targets = _candidates(procs, ai_idle, mux_idle, kinds)
+        if want_leftovers:
+            targets = targets + leftovers_mod.collect(leak_age_seconds=ai_idle)
 
-    targets = _candidates(procs, ai_idle, mux_idle, kinds)
     if not targets:
+        extra = " / no automation-browser leftovers" if want_leftovers else ""
         console.print(
             f"[green]clean[/] — nothing exceeds "
-            f"ai_idle={human_duration(ai_idle)} / mux_idle={human_duration(mux_idle)}."
+            f"ai_idle={human_duration(ai_idle)} / mux_idle={human_duration(mux_idle)}{extra}."
         )
         return 0
 
@@ -81,6 +92,16 @@ def run(
         )
     console.print(table)
     console.print(f"[dim]would reclaim ~{human_bytes(total_rss)} RSS[/]\n")
+
+    # The table lists root processes only; terminate() expands each
+    # automation-browser to its full Chrome helper subtree, so the outcome
+    # lines (and reclaimed RSS) can exceed what is shown here. Say so up front.
+    if any(t.kind == "automation-browser" for t in targets):
+        console.print(
+            "[yellow]note[/]: automation-browser rows reap their whole Chrome "
+            "subtree (renderer/gpu/utility), so more processes may be killed "
+            "than rows shown above.\n"
+        )
 
     action = "DRY-RUN" if dry_run else ("SIGKILL" if force else "SIGTERM")
     if not confirm(f"{action} {len(targets)} idle session(s)?", default=False, assume_yes=assume_yes):

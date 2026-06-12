@@ -16,6 +16,7 @@ from rich.text import Text
 
 from ..collectors import battery as batt_mod
 from ..collectors import hot_procs as hot_mod
+from ..collectors import leftovers as leftovers_mod
 from ..collectors import memory as mem_mod
 from ..collectors import procs as procs_mod
 from ..collectors import system as sys_mod
@@ -149,6 +150,9 @@ KIND_COLORS: dict[str, str] = {
     "tmux": "dim cyan",
     "cmux": "dim cyan",
     "zellij": "dim cyan",
+    # Orphaned automation browsers — the heavier, subtree-killing reap kind;
+    # flag it red so it stands out from AI/mux candidates in the reap table.
+    "automation-browser": "bright_red",
 }
 
 
@@ -869,53 +873,70 @@ def shorten_cmd(name: str, cmdline: str, width: int = 56) -> str:
     return shown
 
 
-def hot_procs_content(rows: list[hot_mod.HotProc], ncpu: int) -> Table:
-    """Render a TOP-by-CPU% table. Public so ``cool watch`` can reuse it."""
-    table = Table(box=None, expand=True, show_edge=False)
-    table.add_column("pid", justify="right", style="dim")
-    table.add_column("cpu%", justify="right")
-    table.add_column("rss", justify="right")
-    table.add_column("age", justify="right", style="dim")
-    table.add_column("user", style="dim")
-    table.add_column("cmd")
+def hot_apps_content(apps: list[hot_mod.HotApp]) -> Table:
+    """Render the Hot-by-app table. Public so callers/tests can reuse it.
 
-    if not rows:
+    Leads with ``cores`` ("how many cores is this app eating") because the
+    old normalized share reads as "5.6" for a process pinning a full core on
+    an 18-core box — right, but uselessly small. ``%sys`` keeps that
+    normalized share so the row still reconciles with the CPU panel total.
+    """
+    table = Table(box=None, expand=True, show_edge=False)
+    table.add_column("app")
+    table.add_column("cores", justify="right")
+    table.add_column("%sys", justify="right")
+    table.add_column("procs", justify="right", style="dim")
+    table.add_column("rss", justify="right")
+    # "note" carries only the leftover flag, so it stays short and the table
+    # reads one line per app. The app name + cores/procs already say what an
+    # ordinary group is; a hottest-member command path here just wrapped.
+    table.add_column("note")
+
+    if not apps:
         table.add_row("", "—", "—", "—", "—", "[dim]nothing burning CPU right now[/]")
         return table
 
-    # cpu_percent is normalized to total-CPU share; ``cpu_percent * ncpu``
-    # tells you "this process is using N cores' worth of work". Anything
-    # north of ~70% of a single core is suspicious for a non-build /
-    # non-render workload, so paint the cpu% column accordingly.
-    for h in rows:
-        per_core_pct = h.cpu_percent * ncpu
-        if per_core_pct >= 80:
-            cpu_clr = "bold red"
-        elif per_core_pct >= 40:
-            cpu_clr = "yellow"
+    for a in apps:
+        if a.cores >= 0.8:
+            clr = "bold red"
+        elif a.cores >= 0.4:
+            clr = "yellow"
         else:
-            cpu_clr = "green"
+            clr = "green"
+        name = f"[yellow]⚠[/] {a.app}" if a.origin else a.app
+        note = (
+            f"[yellow]{a.origin.tool} leftover · {a.origin.reason}[/]" if a.origin else ""
+        )
         table.add_row(
-            str(h.pid),
-            f"[{cpu_clr}]{h.cpu_percent:.1f}[/]",
-            human_bytes(h.rss),
-            human_duration(h.age),
-            (h.user or "")[:10],
-            shorten_cmd(h.name, h.cmdline),
+            name,
+            f"[{clr}]{a.cores:.1f}[/]",
+            f"{a.pct_sys:.1f}%",
+            str(a.nproc),
+            human_bytes(a.rss),
+            note,
         )
     return table
 
 
-def _hot_procs_panel(rows: list[hot_mod.HotProc], ncpu: int) -> Panel:
-    # Surface total share-of-CPU in the title so the user sees the heat
-    # budget at a glance ("5 hot procs · 187% of CPU" is more legible
-    # than scanning 5 rows and summing in your head).
-    total = sum(h.cpu_percent for h in rows) if rows else 0.0
+def _hot_procs_panel(
+    apps: list[hot_mod.HotApp],
+    cov: hot_mod.Coverage | None,
+    sys_stats: sys_mod.SystemStats,
+) -> Panel:
+    # Title carries the coverage reconciliation so the user can tell the
+    # panel is honest — "shown 73%" against an 88%-busy box means a chunk
+    # of load lives in the hidden tail, not that nothing is wrong. The list
+    # is already sorted by load (row 1 = hottest), so no separate "top:"
+    # summary is needed; orphan leftovers are flagged on their own rows.
+    syspct = sys_stats.cpu_percent
+    shown = cov.shown_pct_sys if cov else 0.0
+    tail = cov.tail_pct_sys if cov else 0.0
+    tail_n = cov.tail_nproc if cov else 0
     title = (
-        f"[bold]Hot Processes by CPU%[/]  "
-        f"[dim]· {len(rows)} shown · {total:.1f}% total[/]"
+        f"[bold]Hot Processes by CPU%[/]  [dim]· {syspct:.0f}% busy · "
+        f"shown {shown:.0f}% · +{tail_n} more {tail:.0f}%[/]"
     )
-    return Panel(hot_procs_content(rows, ncpu), title=title, box=SIMPLE, border_style="red")
+    return Panel(hot_apps_content(apps), title=title, box=SIMPLE, border_style="red")
 
 
 def health_score(
@@ -982,7 +1003,13 @@ def render(console: Console | None = None) -> None:
         therm = therm_mod.collect()
         procs = procs_mod.collect()
         procs_mod.enrich_idle(procs)
-        hot = hot_mod.collect(top_n=5)
+        hot_apps, hot_cov = hot_mod.aggregate_by_app(
+            hot_mod.collect(),
+            sys_stats.cpu_count_logical,
+            top_n=20,
+            key_fn=leftovers_mod.browser_aware_key,
+        )
+        leftovers_mod.annotate_origins(hot_apps)
         # Battery temperature is one of the headline cooldown signals; the
         # collector returns None on desktop Macs (Mac mini / Studio / Pro),
         # in which case the panel renders an explicit "no battery" empty
@@ -1016,7 +1043,7 @@ def render(console: Console | None = None) -> None:
         for panel in panels:
             console.print(panel)
     console.print(_cli_panel(procs))
-    console.print(_hot_procs_panel(hot, sys_stats.cpu_count_logical))
+    console.print(_hot_procs_panel(hot_apps, hot_cov, sys_stats))
     console.print(_dev_panel())
 
     # Actionable advice block. Print every hint that applies, in

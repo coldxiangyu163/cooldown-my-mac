@@ -43,7 +43,7 @@ It does **not replace** [Mole](https://github.com/tw93/Mole) (disk cleanup) / [m
 - Every dev process tagged with `project root + launcher + lang/framework`; a 7-level fallback chain guarantees coverage (`cwd unknown` never shows up)
 
 **CPU runaway visibility**
-- `Hot Processes by CPU%` panel ranks the top PIDs by current CPU%, **regardless of AI family** — MCP child scripts, Chrome renderers, third-party GUIs all surface here
+- `Hot Processes by CPU%` panel **aggregates current CPU by owning app** (cores / %sys / proc count), **regardless of AI family** — MCP child scripts, Chrome renderers, third-party GUIs all surface here; leaked automation browsers (agent-browser / puppeteer / playwright) are flagged with a ⚠
 - Anything at ≥ 80% of a single core is painted bold red, so a runaway PID is visible at a glance
 - Shared between `cool status` and `cool watch`; press `k` to kill the PID you just visually picked
 
@@ -54,6 +54,7 @@ It does **not replace** [Mole](https://github.com/tw93/Mole) (disk cleanup) / [m
 
 **Automation & guarding**
 - Memory pressure *critical* triggers auto `sudo purge` + reap + macOS notification
+- Auto-cleans orphaned automation browsers leaked by agent-browser / puppeteer / playwright (whole Chrome subtree; daemon rule is off by default, reaps only the old-and-quiet, spares active sessions)
 - 24/7 launchd daemon + YAML rule engine; install is idempotent
 - One-shot fix for displaysleep / disksleep / sleep-prevention
 
@@ -140,8 +141,8 @@ Every command takes `--help` for its full flag set. The most common invocations:
 │  AI CLI Inventory                │  Top Projects by RSS             │  slow (15 s)
 │  kind · count · rss · idle       │  project · # · rss · launchers   │
 ├──────────────────────────────────┼──────────────────────────────────┤
-│  Hot Processes by CPU%           │  Listening Ports                 │  fast / slow
-│  pid · cpu% · rss · age · cmd    │  port · pid · process · launcher │
+│  Hot Processes by CPU% (by app)  │  Listening Ports                 │  fast / slow
+│  app · cores · %sys · rss · note │  port · pid · process · launcher │
 └──────────────────────────────────┴──────────────────────────────────┘
 ```
 
@@ -174,6 +175,7 @@ cool ports 5432                   # who owns :5432? --free 4000:4100 lists free 
 cool procs                        # list every AI CLI / multiplexer, multi-select kill
 cool reap --dry-run               # preview reapable AI CLI / tmux idle ≥ 30 min
 cool reap --kinds droid,claude --yes        # narrow to families, skip confirm
+cool reap --leftovers --dry-run   # preview leaked automation browsers (agent-browser/puppeteer/playwright); kill tears down the whole Chrome subtree
 ```
 
 **Memory pressure `cool pressure`**
@@ -193,6 +195,7 @@ cool apps resume --kind wechat -y                     # SIGCONT
 ```bash
 cool thermal --restore            # reset displaysleep / disksleep / powernap defaults
 cool launchd --audit --disable    # list third-party agents + interactive bootout (Apple refused)
+cool daemon config-init           # write ~/.config/cooldown/daemon.yaml (incl. the leftovers auto-reap rule, off by default)
 cool daemon install               # register the 24/7 LaunchAgent
 ```
 

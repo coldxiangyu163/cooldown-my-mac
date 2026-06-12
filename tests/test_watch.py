@@ -346,12 +346,24 @@ async def test_watch_app_end_to_end_mount_and_apply():
                 process="node", project="web", launcher="droid",
             )
         ])
-        app._apply_hot([
-            watch.HotRow(
-                pid=78303, cpu_percent=9.8, rss=600 * 1024**2,
-                age=4 * 3600.0, user="me", cmd="python doctor.py",
-            )
-        ])
+        from cooldown.collectors import hot_procs as hot_mod
+        app._apply_hot(
+            [
+                watch.HotAppRow(
+                    app="python3.13", cores=0.98, pct_sys=9.8, nproc=1,
+                    rss=600 * 1024**2, pids=[78303], origin_label="",
+                    members=[
+                        watch.HotMemberRow(
+                            pid=78303, cores=0.98, pct_sys=9.8,
+                            rss=600 * 1024**2, age=4 * 3600.0, cmd="python doctor.py",
+                        )
+                    ],
+                )
+            ],
+            hot_mod.Coverage(
+                total_pct_sys=9.8, shown_pct_sys=9.8, tail_pct_sys=0.0, tail_nproc=0
+            ),
+        )
         await pilot.pause()
 
         # All seven panels are mounted with the expected ids.
@@ -372,6 +384,7 @@ async def test_watch_app_end_to_end_mount_and_apply():
         assert app.query_one("#ai", DataTable).row_count == 1
         assert app.query_one("#projects", DataTable).row_count == 1
         assert app.query_one("#ports", DataTable).row_count == 1
+        # Hot-by-app renders one group row (collapsed, no members shown).
         assert app.query_one("#hot", DataTable).row_count == 1
 
 
@@ -383,33 +396,61 @@ def test_watch_app_binds_focus_hot_to_4():
     assert "4" in keys, f"missing binding: '4' for hot procs (have {keys})"
 
 
-def test_build_hot_rows_truncates_to_limit():
-    """``build_hot_rows`` must respect ``limit`` so the table doesn't
-    blow past the 8-row visual budget when psutil returns a wide TOP-N."""
+def test_build_hot_app_rows_limits_members():
+    """``build_hot_app_rows`` keeps the full per-app count but truncates the
+    expandable member list so a 50-renderer Chrome doesn't blow the budget."""
     from cooldown.collectors import hot_procs as hot_mod
-    raw = [
+    procs = [
         hot_mod.HotProc(
-            pid=i, name="p", cmdline=f"py {i}.py",
-            cpu_percent=float(100 - i), rss=1, user="u",
-            create_time=0.0, age=1.0,
+            pid=i, name="Google Chrome", cmdline="Google Chrome --type=renderer",
+            cpu_percent=1.0, rss=1, user="u", create_time=0.0, age=1.0,
+            exe="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         )
         for i in range(20)
     ]
-    rows = watch.build_hot_rows(raw, limit=5)
-    assert len(rows) == 5
-    assert rows[0].pid == 0  # first item preserved (already CPU-sorted upstream)
+    apps, _ = hot_mod.aggregate_by_app(procs, ncpu=10, top_n=8)
+    rows = watch.build_hot_app_rows(apps, ncpu=10, member_limit=5)
+    assert len(rows) == 1  # all 20 collapse into one "Google Chrome"
+    assert rows[0].nproc == 20  # full count preserved
+    assert len(rows[0].members) == 5  # display members truncated
 
 
-def test_targets_for_hot_returns_single_pid():
-    """A Hot Processes row maps to exactly one PID — unlike AI / project
-    rows which aggregate. This guarantees ``k`` kills only what the user
-    visually picked."""
+def test_targets_for_hot_group_and_member():
+    """A group row signals every PID in the app; a member row signals just
+    that one. This is what makes ``k`` safe on the aggregated view."""
     app_cls = watch._build_app_class()
     app = app_cls(fast_interval=999, slow_interval=999)
-    app._hot_rows = [
-        watch.HotRow(pid=4242, cpu_percent=50.0, rss=1,
-                     age=10.0, user="u", cmd="py burn.py"),
-    ]
+    grp = watch.HotAppRow(
+        app="Google Chrome", cores=2.0, pct_sys=20.0, nproc=2,
+        rss=1, pids=[111, 222], origin_label="", members=[],
+    )
+    member = watch.HotMemberRow(
+        pid=222, cores=1.0, pct_sys=10.0, rss=1, age=1.0, cmd="renderer",
+    )
+    app._hot_visible = [("group", grp), ("member", member)]
+
+    assert sorted(t.pid for t in app._targets_for("hot", 0)) == [111, 222]  # group → all
+    one = app._targets_for("hot", 1)  # member → single pid
+    assert [t.pid for t in one] == [222]
+    assert one[0].cmdline == "renderer"
+    # A plain (non-leftover) group keeps generic hot-app semantics.
+    assert all(t.kind == "hot-app" for t in app._targets_for("hot", 0))
+    # out-of-range / unknown row → nothing to kill
+    assert app._targets_for("hot", 9) == []
+
+
+def test_targets_for_hot_group_with_origin_uses_automation_browser_kind():
+    """A hot-app group flagged as an automation-browser leftover must kill with
+    kind='automation-browser' so reap expands the Chrome helper subtree; a plain
+    'hot-app' kind would skip subtree expansion and leave idle helpers alive."""
+    app_cls = watch._build_app_class()
+    app = app_cls(fast_interval=999, slow_interval=999)
+    grp = watch.HotAppRow(
+        app="Google Chrome", cores=2.0, pct_sys=20.0, nproc=2,
+        rss=1, pids=[111, 222], origin_label="⚠ agent-browser leftover", members=[],
+    )
+    app._hot_visible = [("group", grp)]
+
     targets = app._targets_for("hot", 0)
-    assert [t.pid for t in targets] == [4242]
-    assert targets[0].cmdline == "py burn.py"
+    assert {t.pid for t in targets} == {111, 222}
+    assert all(t.kind == "automation-browser" for t in targets)

@@ -184,6 +184,13 @@ def _reap_cmd(
     kinds: list[str] = typer.Option(
         None, "--kind", "-k", help="Limit reap to specific kinds."
     ),
+    leftovers: bool = typer.Option(
+        False,
+        "--leftovers",
+        "-l",
+        help="Also reap orphaned automation browsers (agent-browser / "
+        "puppeteer / playwright leftovers from AI sessions).",
+    ),
 ) -> None:
     from .ui import reap  # noqa: PLC0415
 
@@ -195,6 +202,7 @@ def _reap_cmd(
         force=force,
         assume_yes=yes,
         kinds=kinds or None,
+        leftovers=leftovers,
     )
     raise typer.Exit(code)
 
