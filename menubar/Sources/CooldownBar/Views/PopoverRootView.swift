@@ -94,13 +94,17 @@ struct PopoverRootView: View {
     }
 
     private func familyRow(_ f: Family) -> RankRow {
-        let reapable = AI_KINDS.contains(f.kind) && f.maxIdle > 1800
+        let isAI = AI_KINDS.contains(f.kind)
+        let reapable = isAI && f.maxIdle > 1800   // cool reap's own threshold
         var act: (@MainActor () -> Void)? = nil
         if reapable { act = { runner.confirmReap(kind: f.kind) } }
+        // Rows that offer no 回收 say why on hover instead of staying mute.
+        let note: String? = reapable ? nil
+            : (isAI ? "闲置 \(Fmt.duration(f.maxIdle)) · 满 30m 可回收" : "非 AI 会话 · 不参与回收")
         return RankRow(dot: Palette.kindColor(f.kind), label: f.kind, sublabel: nil, value: f.rss,
                        trailing: "\(f.count) · \(Fmt.bytes(f.rss)) · \(Int(f.cpu))%",
                        barColor: Palette.kindColor(f.kind),
-                       action: act, actionLabel: reapable ? "♻ 回收" : nil)
+                       action: act, actionLabel: reapable ? "♻ 回收" : nil, hoverNote: note)
     }
 
     @ViewBuilder private func projectSection(_ s: Status) -> some View {

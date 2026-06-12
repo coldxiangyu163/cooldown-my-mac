@@ -273,7 +273,6 @@ struct CoreLoadChart: View {
 // MARK: - Ranking bars (AI families + projects)
 
 struct RankRow: Identifiable {
-    let id = UUID()
     let dot: Color?
     let label: String
     let sublabel: String?
@@ -282,13 +281,16 @@ struct RankRow: Identifiable {
     let barColor: Color
     var action: (@MainActor () -> Void)? = nil
     var actionLabel: String? = nil
+    var hoverNote: String? = nil   // actionless rows explain themselves on hover
+    // Keyed by label (unique per card) so hover survives the 12s data refresh.
+    var id: String { label }
 }
 
 struct RankBars: View {
     let title: String
     let icon: String
     let rows: [RankRow]
-    @State private var hovered: UUID?
+    @State private var hovered: String?
 
     var body: some View {
         let maxV = max(1, rows.map(\.value).max() ?? 1)
@@ -298,7 +300,8 @@ struct RankBars: View {
                 Image(systemName: icon).font(.system(size: 10)).foregroundStyle(Theme.faint)
             }
             ForEach(rows) { r in
-                let active = r.action != nil && hovered == r.id
+                let hover = hovered == r.id
+                let active = r.action != nil && hover
                 VStack(alignment: .leading, spacing: 3) {
                     // fixed header height — hover pill must never grow the row (window size is pinned)
                     HStack(spacing: 6) {
@@ -315,6 +318,11 @@ struct RankBars: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("\(al)，\(r.label)")
+                        } else if hover, r.action == nil, let note = r.hoverNote {
+                            // Plain faint text, no pill/highlight: explains *why* there
+                            // is nothing to do here instead of ignoring the hover.
+                            Text(note).font(Theme.text(10)).foregroundStyle(Theme.faint)
+                                .frame(height: 15).lineLimit(1)
                         }
                     }
                     .frame(height: 16)
@@ -335,7 +343,7 @@ struct RankBars: View {
                 .background(active ? Color.primary.opacity(0.06) : .clear,
                             in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .contentShape(Rectangle())
-                .onHover { if r.action != nil { hovered = $0 ? r.id : nil } }
+                .onHover { hovered = $0 ? r.id : nil }
             }
         }
         .padding(10)
