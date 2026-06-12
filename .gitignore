@@ -46,6 +46,13 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Swift / menu bar app
+.build/
+menubar/.build/
+menubar/dist/
+*.xcuserstate
+.swiftpm/
+
 # local agent/runtime state
 .omx/
 .claude/

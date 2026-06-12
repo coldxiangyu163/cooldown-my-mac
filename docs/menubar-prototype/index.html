@@ -1,0 +1,871 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coolant — Menu-bar Popover</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;600&family=Inter:wght@400;500;600&family=Nunito:wght@600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   COOLANT — macOS Tahoe menu-bar popover, high-fidelity prototype
+   Native, restrained, grayscale-dominant. Color only at threshold.
+   ============================================================ */
+
+:root{
+  /* fonts: real SF on macOS, Google-font fallback elsewhere */
+  --mono:"SF Mono", ui-monospace, "Roboto Mono", Menlo, monospace;
+  --sans:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --round:"SF Pro Rounded", ui-rounded, "Nunito", var(--sans);
+
+  /* state accents (shared by both themes) */
+  --green:#34C759;
+  --amber:#FF9F0A;
+  --red:#FF453A;
+  --cyan:#64D2FF;
+
+  /* kind identity dots */
+  --k-claude:#FF6FD8;
+  --k-codex:#30D158;
+  --k-node:#0A84FF;
+}
+
+/* ---------- DARK theme (primary) ---------- */
+.theme-dark{
+  --glass: rgba(28,28,30,0.72);
+  --specular: rgba(255,255,255,0.12);
+  --pop-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  --tile: rgba(255,255,255,0.06);
+  --tile-border: rgba(255,255,255,0.14);
+  --hairline: rgba(255,255,255,0.10);
+  --trough: rgba(235,235,240,0.08);
+  --inset: rgba(255,255,255,0.04);
+  --inset-border: rgba(255,255,255,0.08);
+  --sat-bg: rgba(20,20,22,0.55);
+  --text-1: rgba(255,255,255,0.90);
+  --text-2: rgba(235,235,245,0.60);
+  --text-3: rgba(235,235,245,0.30);
+  --amber-wash: rgba(255,159,10,0.08);
+  --red-wash: rgba(255,69,58,0.10);
+  --cap: rgba(235,235,245,0.45);
+}
+/* ---------- LIGHT theme (same component, light values) ---------- */
+.theme-light{
+  --glass: rgba(250,250,252,0.72);
+  --specular: rgba(255,255,255,0.70);
+  --pop-shadow: 0 20px 60px rgba(0,0,0,0.18);
+  --tile: rgba(255,255,255,0.55);
+  --tile-border: rgba(0,0,0,0.06);
+  --hairline: rgba(0,0,0,0.08);
+  --trough: rgba(60,60,67,0.12);
+  --inset: rgba(0,0,0,0.03);
+  --inset-border: rgba(0,0,0,0.06);
+  --sat-bg: rgba(255,255,255,0.75);
+  --text-1: rgba(0,0,0,0.85);
+  --text-2: rgba(60,60,67,0.60);
+  --text-3: rgba(60,60,67,0.30);
+  --amber-wash: rgba(255,159,10,0.10);
+  --red-wash: rgba(255,69,58,0.08);
+  --cap: rgba(60,60,67,0.55);
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;}
+body{
+  font-family:var(--sans);
+  font-variant-numeric:tabular-nums;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  background:
+    radial-gradient(900px 600px at 18% -10%, #25313f 0%, transparent 55%),
+    radial-gradient(700px 500px at 88% 110%, #2a2230 0%, transparent 50%),
+    linear-gradient(160deg, #14181d 0%, #0c0e12 100%);
+  color:#e9eaec;
+  min-height:100%;
+  padding:40px 28px 64px;
+}
+
+/* ---------- page chrome ---------- */
+.page-head{max-width:1000px;margin:0 auto 28px;}
+.page-head h1{font-family:var(--round);font-size:19px;font-weight:700;letter-spacing:-.2px;color:#f2f3f5;}
+.page-head p{font-size:12.5px;color:rgba(235,235,245,0.45);margin-top:3px;}
+
+.stages{
+  max-width:1000px;margin:0 auto;
+  display:flex;flex-wrap:wrap;gap:36px;justify-content:center;align-items:flex-start;
+}
+figure.stage{margin:0;}
+figcaption{
+  margin-top:14px;text-align:center;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.4px;
+  color:var(--cap);text-transform:uppercase;
+}
+.stage-dark{--cap:rgba(235,235,245,0.45);}
+.stage-light{--cap:rgba(60,60,67,0.55);}
+
+/* ---------- the "desktop" each popover floats on ---------- */
+.desktop{
+  position:relative;width:444px;min-height:760px;
+  border-radius:20px;overflow:hidden;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,0.04), 0 30px 80px rgba(0,0,0,0.35);
+}
+.stage-dark .desktop{
+  background:
+    radial-gradient(420px 320px at 78% 8%, rgba(100,210,255,0.16), transparent 60%),
+    radial-gradient(520px 420px at 12% 96%, rgba(255,111,216,0.12), transparent 60%),
+    linear-gradient(155deg, #2b3b4d 0%, #161d27 60%, #0f1319 100%);
+}
+.stage-light .desktop{
+  background:
+    radial-gradient(420px 320px at 80% 6%, rgba(10,132,255,0.18), transparent 60%),
+    radial-gradient(520px 420px at 10% 98%, rgba(255,159,10,0.14), transparent 60%),
+    linear-gradient(155deg, #dfe7f1 0%, #eef1f5 55%, #e7ebf1 100%);
+}
+
+/* ---------- fake macOS menu bar (full width of desktop) ---------- */
+.menubar{
+  position:absolute;top:0;left:0;right:0;height:24px;z-index:5;
+  display:flex;align-items:center;gap:14px;padding:0 10px;
+  background:rgba(22,24,28,0.55);
+  backdrop-filter:blur(20px) saturate(1.5);
+  -webkit-backdrop-filter:blur(20px) saturate(1.5);
+  border-bottom:0.5px solid rgba(255,255,255,0.08);
+  font-size:12px;color:rgba(255,255,255,0.82);
+}
+.is-light .menubar{
+  background:rgba(252,252,253,0.62);
+  border-bottom:0.5px solid rgba(0,0,0,0.08);
+  color:rgba(0,0,0,0.80);
+}
+.mb-mark{width:11px;height:11px;border-radius:3px;background:linear-gradient(160deg,#5ad6a0,#34C759);box-shadow:0 0 6px rgba(52,199,89,.5);}
+.mb-app{font-weight:600;letter-spacing:-.1px;}
+.mb-menu{opacity:.66;font-weight:400;}
+.mb-spacer{flex:1;}
+.mb-right{display:flex;align-items:center;gap:12px;}
+.mb-glyph{opacity:.62;display:flex;}
+.mb-clock{font-family:var(--mono);font-size:11.5px;font-weight:500;opacity:.85;letter-spacing:.2px;}
+.mb-item{
+  display:flex;align-items:center;gap:5px;padding:1px 6px 1px 4px;border-radius:6px;
+  background:rgba(255,255,255,0.10);
+}
+.is-light .mb-item{background:rgba(0,0,0,0.06);}
+.mb-item .mb-num{font-family:var(--mono);font-size:11px;font-weight:500;opacity:.85;}
+.mb-ring{width:16px;height:16px;display:block;}
+.mb-ring .t{fill:none;stroke:rgba(255,255,255,0.16);stroke-width:2.4;}
+.is-light .mb-ring .t{stroke:rgba(0,0,0,0.12);}
+.mb-ring .a{fill:none;stroke:var(--green);stroke-width:2.4;stroke-linecap:round;}
+
+/* ---------- THE POPOVER ---------- */
+.popover{
+  position:absolute;top:33px;right:12px;width:380px;
+  border-radius:16px;padding:16px;
+  background:var(--glass);
+  backdrop-filter:blur(40px) saturate(1.6);
+  -webkit-backdrop-filter:blur(40px) saturate(1.6);
+  box-shadow:
+    inset 0 1px 0 var(--specular),     /* 0.5px top-edge specular highlight */
+    inset 0 0 0 0.5px var(--hairline),
+    var(--pop-shadow);
+  color:var(--text-1);
+}
+/* popover arrow pointing up to the bar item */
+.popover::before{
+  content:"";position:absolute;top:-6px;right:30px;width:12px;height:12px;
+  background:var(--glass);
+  backdrop-filter:blur(40px) saturate(1.6);
+  -webkit-backdrop-filter:blur(40px) saturate(1.6);
+  border-top:0.5px solid var(--specular);
+  border-left:0.5px solid var(--specular);
+  transform:rotate(45deg);border-radius:3px 0 0 0;
+}
+
+.sep{height:0.5px;background:var(--hairline);margin:14px 0;border:0;}
+
+/* ============= 2 · MASTER CLUSTER ============= */
+.cluster{position:relative;text-align:center;padding-top:6px;}
+.hero-ring{position:relative;width:128px;height:128px;margin:0 auto;overflow:visible;}
+.hero-svg{position:absolute;inset:0;width:128px;height:128px;}
+.hero-svg .trough{fill:none;stroke:var(--trough);stroke-width:2.5;}
+.hero-svg .arc{fill:none;stroke:var(--green);stroke-width:2.5;stroke-linecap:round;}
+.hero-svg .tick{stroke:var(--text-3);stroke-width:1;opacity:.5;}
+
+.needle{
+  position:absolute;left:50%;bottom:50%;width:1.5px;height:50px;margin-left:-.75px;
+  border-radius:1px;transform-origin:bottom center;transform:rotate(295.2deg);
+  background:linear-gradient(to top, transparent, var(--text-1));
+  opacity:.5;z-index:3;transition:transform .14s linear;
+}
+.needle::after{content:"";position:absolute;top:-2px;left:50%;width:4px;height:4px;margin-left:-2px;border-radius:50%;background:var(--text-1);box-shadow:0 0 5px var(--text-1);}
+.popover.scrubbing .needle{opacity:.95;}
+.needle.spring{transition:transform .5s cubic-bezier(.34,1.45,.5,1);}
+
+.bore{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:2;pointer-events:none;}
+.bore-val{font-family:var(--mono);font-size:52px;font-weight:600;line-height:1;letter-spacing:-1.5px;color:var(--green);transition:opacity .11s ease,color .2s ease;}
+.bore-val.fading{opacity:0;}
+.bore-val.amber{color:var(--amber);} .bore-val.red{color:var(--red);} .bore-val.cyan{color:var(--cyan);} .bore-val.neutral{color:var(--text-1);}
+.bore-val .od-cell{width:.62em;}
+.bore-val.word{font-family:var(--round);font-size:30px;letter-spacing:0;font-weight:600;}
+.bore-sub{font-family:var(--mono);font-size:11px;color:var(--text-3);margin-top:2px;transition:opacity .15s;}
+.bore-label{font-family:var(--sans);font-size:10px;font-weight:500;letter-spacing:.6px;text-transform:uppercase;color:var(--text-3);margin-top:4px;transition:opacity .11s,color .2s;white-space:nowrap;}
+.bore-label.fading{opacity:0;}
+.bore-label.amber{color:var(--amber);} .bore-label.red{color:var(--red);} .bore-label.cyan{color:var(--cyan);} .bore-label.green{color:var(--green);}
+.bore-label.scrub{text-transform:none;letter-spacing:.2px;}
+.bore-label .verdict{font-family:var(--round);font-weight:600;}
+
+/* satellite mini dials at 4 & 8 o'clock */
+.sat{position:absolute;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:var(--sat-bg);box-shadow:inset 0 0 0 0.5px var(--tile-border);z-index:4;}
+.sat-ring{position:absolute;inset:0;width:26px;height:26px;}
+.sat-ring .t{fill:none;stroke:var(--trough);stroke-width:2;}
+.sat-ring .a{fill:none;stroke-width:2;stroke-linecap:round;}
+.sat-cpu .sat-ring .a{stroke:var(--text-2);}
+.sat-th  .sat-ring .a{stroke:var(--cyan);}
+.sat-val{font-family:var(--mono);font-size:8.5px;font-weight:500;color:var(--text-2);position:relative;z-index:1;}
+.sat-th .sat-val{font-family:var(--round);font-size:7.5px;font-weight:600;color:var(--cyan);}
+.sat-cpu{left:106px;top:83px;}
+.sat-th{left:-4px;top:83px;}
+
+.cluster-desc{margin-top:12px;font-size:13px;color:var(--text-2);line-height:1.3;transition:opacity .14s;}
+.scrub-legend{
+  position:absolute;left:50%;bottom:-34px;transform:translateX(-50%);
+  display:flex;flex-direction:column;gap:1px;
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.2px;color:var(--text-3);
+  opacity:0;transition:opacity .2s;pointer-events:none;text-align:left;white-space:nowrap;
+}
+.scrub-legend b{font-weight:500;color:var(--text-2);}
+.scrub-legend .pa{color:var(--amber);}
+.popover.scrubbing .scrub-legend{opacity:1;}
+.popover.scrubbing .cluster-desc{opacity:0;}
+
+/* ============= 3 · QUAD VITALS ============= */
+.quad{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.tile{
+  position:relative;height:64px;border-radius:12px;padding:8px 10px;
+  background:var(--tile);box-shadow:inset 0 0 0 0.5px var(--tile-border);
+  display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;
+}
+.tile.amber-tile{background:var(--amber-wash);}
+.tile-head{display:flex;align-items:center;gap:7px;}
+.mini-ring{width:16px;height:16px;flex:none;}
+.mini-ring .t{fill:none;stroke:var(--trough);stroke-width:2;}
+.mini-ring .a{fill:none;stroke-width:2;stroke-linecap:round;stroke:var(--text-2);}
+.mini-ring .a.amber{stroke:var(--amber);} .mini-ring .a.green{stroke:var(--green);} .mini-ring .a.cyan{stroke:var(--cyan);}
+.tile-val{font-family:var(--mono);font-size:24px;font-weight:600;line-height:1;letter-spacing:-.5px;color:var(--text-1);}
+.tile-val.null{color:var(--text-3);font-weight:500;}
+.tile-badge{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--text-3);padding:2px 5px;border-radius:5px;background:var(--inset);box-shadow:inset 0 0 0 0.5px var(--inset-border);}
+.tile-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;}
+.tile-sub{font-size:11px;color:var(--text-2);display:flex;align-items:center;gap:5px;}
+.tile-sub .num{font-family:var(--mono);}
+.tile-sub.amber{color:var(--amber);}
+.dot{width:6px;height:6px;border-radius:50%;flex:none;}
+.dot.amber{background:var(--amber);box-shadow:0 0 5px rgba(255,159,10,.5);}
+.ic{display:block;}
+.ic.bolt{color:var(--green);width:8px;height:11px;}
+.ic.glyph{color:var(--text-3);width:11px;height:11px;}
+.tile-glyphs{display:flex;align-items:center;gap:5px;}
+
+/* per-core sparkstrip */
+.spark{display:flex;align-items:flex-end;gap:1.6px;height:13px;}
+.spark i{width:2.2px;border-radius:1px;background:var(--green);display:block;}
+.spark i.am{background:var(--amber);} .spark i.rd{background:var(--red);}
+
+/* ============= 4 · ON FIRE ============= */
+.fire-card{position:relative;border-radius:12px;background:var(--inset);box-shadow:inset 0 0 0 0.5px var(--inset-border);padding:9px 6px 6px;overflow:hidden;}
+.fire-card::before{content:"";position:absolute;top:0;left:0;right:0;height:6px;background:linear-gradient(rgba(255,69,58,0.55), transparent);}
+.card-h{display:flex;align-items:center;font-family:var(--mono);font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-3);padding:0 6px 7px;}
+.card-h .hot{color:var(--red);}
+.proc-row{position:relative;height:30px;display:flex;align-items:center;gap:8px;padding:0 6px;border-radius:7px;}
+.proc-row.hot{}
+.proc-row.hot::before{content:"";position:absolute;inset:0;border-radius:7px;background:radial-gradient(120px 30px at 30% 50%, var(--red-wash), transparent 70%);pointer-events:none;}
+.rank{font-family:var(--mono);font-size:10px;color:var(--text-3);width:10px;text-align:center;flex:none;position:relative;z-index:1;}
+.cmd{flex:1;min-width:0;font-size:13px;display:flex;align-items:center;gap:5px;position:relative;z-index:1;overflow:hidden;}
+.cmd .pname{font-weight:600;color:var(--text-1);flex:none;}
+.cmd .ppath{color:var(--text-2);direction:rtl;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;unicode-bidi:plaintext;}
+.flame{width:10px;height:11px;color:var(--red);flex:none;}
+.meter{position:relative;height:4px;width:42px;border-radius:2px;background:var(--trough);overflow:hidden;flex:none;z-index:1;}
+.meter::after{content:"";position:absolute;inset:0;width:var(--m,0%);border-radius:2px;background:var(--text-2);}
+.meter.red::after{background:var(--red);}
+.pcpu{font-family:var(--mono);font-size:15px;font-weight:500;width:54px;text-align:right;flex:none;z-index:1;color:var(--text-1);}
+.pcpu.red{color:var(--red);}
+.pmeta{font-family:var(--mono);font-size:10px;color:var(--text-3);width:62px;text-align:right;flex:none;z-index:1;}
+.kill-btn{
+  position:absolute;right:6px;top:50%;transform:translateY(-50%) translateX(4px);
+  font-size:11px;font-weight:600;color:#fff;background:var(--red);
+  padding:3px 9px;border-radius:6px;opacity:0;pointer-events:none;z-index:2;
+  transition:opacity .14s, transform .14s;box-shadow:0 2px 8px rgba(255,69,58,.4);
+}
+.proc-row:hover .kill-btn{opacity:1;transform:translateY(-50%) translateX(0);}
+.proc-row:hover .pmeta{opacity:0;}
+
+/* ============= 5 · AI SESSIONS ============= */
+.ai-row{position:relative;display:flex;align-items:center;gap:9px;height:38px;padding:0 6px;border-radius:7px;}
+.ai-row.flag::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;border-radius:2px;background:var(--amber);opacity:.65;}
+.kdot{width:8px;height:8px;border-radius:50%;flex:none;}
+.kdot.claude{background:var(--k-claude);box-shadow:0 0 6px rgba(255,111,216,.5);}
+.kdot.node{background:var(--k-node);box-shadow:0 0 6px rgba(10,132,255,.5);}
+.kdot.codex{background:var(--k-codex);box-shadow:0 0 6px rgba(48,209,88,.5);}
+.ai-id{flex:1;min-width:0;}
+.ai-name{font-size:13px;font-weight:600;color:var(--text-1);}
+.ai-meta{font-family:var(--mono);font-size:10.5px;color:var(--text-3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.gauge{position:relative;height:4px;width:34px;border-radius:2px;background:var(--trough);overflow:hidden;flex:none;}
+.gauge::after{content:"";position:absolute;inset:0;width:var(--g,0%);border-radius:2px;}
+.gauge.green::after{background:var(--green);}
+.gauge.red::after{background:var(--red);}
+.reap-verb{font-size:11px;font-weight:600;color:var(--amber);opacity:0;width:0;overflow:hidden;transition:opacity .14s;flex:none;text-align:right;}
+.ai-row:hover .reap-verb{opacity:1;width:34px;}
+
+/* ============= 6 · ACTION FOOTER ============= */
+.footer{border-top:0.5px solid var(--hairline);margin-top:14px;padding-top:12px;}
+.foot-row{display:flex;align-items:center;gap:8px;}
+.reap-cap{
+  position:relative;display:flex;align-items:center;gap:7px;
+  font-size:13px;font-weight:600;color:var(--text-1);
+  padding:7px 11px;border-radius:9px;cursor:default;
+  background:var(--tile);box-shadow:inset 0 0 0 0.5px var(--tile-border);
+  transition:background .14s;
+}
+.reap-cap:hover{background:var(--inset);}
+.reap-cap .snow{width:13px;height:13px;color:var(--cyan);}
+.reap-badge{font-family:var(--mono);font-size:11px;font-weight:600;color:#fff;background:var(--red);border-radius:9px;min-width:18px;height:18px;display:flex;align-items:center;justify-content:center;padding:0 5px;}
+.reap-tip{
+  position:absolute;bottom:calc(100% + 8px);left:14px;
+  font-family:var(--mono);font-size:10px;color:var(--text-3);
+  background:var(--glass);box-shadow:inset 0 0 0 0.5px var(--hairline),0 6px 18px rgba(0,0,0,.3);
+  padding:4px 8px;border-radius:6px;white-space:nowrap;opacity:0;transform:translateY(3px);
+  transition:opacity .14s, transform .14s;pointer-events:none;
+}
+.reap-cap:hover .reap-tip{opacity:1;transform:translateY(0);}
+.foot-icons{display:flex;align-items:center;gap:7px;margin-left:auto;}
+.ibtn{
+  width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+  background:var(--tile);box-shadow:inset 0 0 0 0.5px var(--tile-border);color:var(--text-2);
+  transition:background .14s, color .14s;cursor:default;
+}
+.ibtn:hover{background:var(--inset);color:var(--text-1);}
+.ibtn .ic{width:14px;height:14px;}
+.foot-meta{
+  display:flex;align-items:center;gap:6px;margin-top:10px;
+  font-family:var(--mono);font-size:10px;color:var(--text-3);
+}
+.live{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 2s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:.35;transform:scale(.8);}50%{opacity:1;transform:scale(1.1);box-shadow:0 0 6px rgba(52,199,89,.6);}}
+
+/* ============= TARGET MODE (static demo) ============= */
+.target-wrap{max-width:1000px;margin:46px auto 0;display:flex;justify-content:center;}
+.target-card{position:static;width:380px;}
+.target-card::before{display:none;}
+.tm-h{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-2);margin-bottom:10px;}
+.tm-h .opt{color:var(--red);}
+.tm-panel{border-radius:12px;background:var(--inset);box-shadow:inset 0 1px 2px rgba(0,0,0,.25), inset 0 0 0 0.5px var(--inset-border);padding:8px 6px;}
+.tm-row{position:relative;display:flex;align-items:center;gap:9px;height:34px;padding:0 8px;border-radius:7px;overflow:hidden;}
+.tm-row::before{ /* red 8% crosshair underlay */
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:
+    linear-gradient(rgba(255,69,58,0.08),rgba(255,69,58,0.08)) center/100% 1px no-repeat,
+    linear-gradient(rgba(255,69,58,0.08),rgba(255,69,58,0.08)) 22px 0/1px 100% no-repeat;
+}
+.tm-badge{position:relative;z-index:1;width:16px;height:16px;border-radius:5px;flex:none;display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:10px;font-weight:600;color:var(--text-1);background:var(--tile);box-shadow:inset 0 0 0 0.5px var(--tile-border);}
+.tm-name{position:relative;z-index:1;flex:1;min-width:0;font-size:12.5px;display:flex;align-items:center;gap:5px;overflow:hidden;}
+.tm-name .pname{font-weight:600;}
+.tm-name .ppath{color:var(--text-2);direction:rtl;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;unicode-bidi:plaintext;}
+.tm-name .kdot{width:7px;height:7px;}
+.tm-verb{position:relative;z-index:1;font-size:11px;font-weight:600;color:#fff;background:var(--red);padding:3px 9px;border-radius:6px;flex:none;}
+.tm-verb.amber{background:var(--amber);}
+.confirm-chip{
+  display:flex;align-items:center;gap:8px;margin:8px 6px 2px;padding:7px 10px;border-radius:8px;
+  font-family:var(--mono);font-size:11.5px;color:var(--text-1);
+  background:rgba(255,69,58,0.12);box-shadow:inset 0 0 0 0.5px rgba(255,69,58,0.4);
+}
+.confirm-chip .ret{margin-left:auto;font-size:11px;color:var(--text-2);}
+.tm-hint{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:10px;font-family:var(--mono);font-size:10px;color:var(--text-3);}
+.kbd{font-family:var(--mono);font-size:10px;color:var(--text-2);background:var(--tile);box-shadow:inset 0 0 0 0.5px var(--tile-border);padding:1px 5px;border-radius:4px;}
+
+.foothint{max-width:1000px;margin:34px auto 0;text-align:center;font-size:12px;color:rgba(235,235,245,0.35);}
+
+/* ---------- odometer cells ---------- */
+.odo{display:inline-flex;align-items:baseline;font-variant-numeric:tabular-nums;line-height:1;font-family:var(--mono);}
+.od-cell{display:inline-block;overflow:hidden;height:1em;line-height:1;width:.6em;text-align:center;vertical-align:baseline;}
+.od-strip{display:block;transition:transform .55s cubic-bezier(.2,.85,.25,1);}
+.od-strip>span{display:block;height:1em;line-height:1;}
+.od-sep{display:inline-block;}
+
+@media (prefers-reduced-motion: reduce){
+  .od-strip{transition:none;}
+  .needle,.needle.spring{transition:none;}
+  .live{animation:none;opacity:.8;}
+}
+@media (max-width:980px){
+  .stages{flex-direction:column;align-items:center;}
+}
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <h1>Coolant</h1>
+  <p>menu-bar popover · high-fidelity interactive prototype · dark primary + light</p>
+</header>
+
+<div class="stages">
+  <!-- ============ DARK (primary) — authored once ============ -->
+  <figure class="stage stage-dark">
+    <div class="desktop" id="desk-src">
+      <!-- 1 · FAKE MENU BAR -->
+      <div class="menubar">
+        <span class="mb-mark"></span>
+        <span class="mb-app">Coolant</span>
+        <span class="mb-menu">Monitor</span>
+        <span class="mb-menu">View</span>
+        <span class="mb-spacer"></span>
+        <div class="mb-right">
+          <span class="mb-glyph"><svg width="15" height="11" viewBox="0 0 15 11"><g stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><line x1="1" y1="9" x2="1" y2="9.5"/><line x1="3.5" y1="6.5" x2="3.5" y2="9.5"/><line x1="6" y1="4" x2="6" y2="9.5"/><line x1="8.5" y1="2" x2="8.5" y2="9.5"/></g></svg></span>
+          <span class="mb-clock">9:41 AM</span>
+          <span class="mb-item">
+            <svg class="mb-ring" viewBox="0 0 16 16"><circle class="t" cx="8" cy="8" r="6.5"/><circle class="a" cx="8" cy="8" r="6.5" transform="rotate(-90 8 8)" stroke-dasharray="40.84" stroke-dashoffset="7.35"/></svg>
+            <span class="mb-num odo" data-odo data-base="48" data-min="46" data-max="50" data-dec="0">48</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- ===== POPOVER ===== -->
+      <div class="popover theme-dark">
+
+        <!-- 2 · MASTER CLUSTER -->
+        <div class="cluster">
+          <div class="hero-ring">
+            <svg class="hero-svg" viewBox="0 0 128 128">
+              <circle class="trough" cx="64" cy="64" r="60"/>
+              <circle class="arc" cx="64" cy="64" r="60" transform="rotate(-90 64 64)" stroke-dasharray="376.99" stroke-dashoffset="67.86"/>
+              <g class="hero-ticks"></g>
+            </svg>
+            <div class="needle"></div>
+            <div class="bore">
+              <span class="bore-val odo" data-odo data-hero data-base="82" data-min="80" data-max="84" data-dec="0">82</span>
+              <span class="bore-sub">/100</span>
+              <span class="bore-label">HEALTH</span>
+            </div>
+            <!-- satellites -->
+            <div class="sat sat-cpu">
+              <svg class="sat-ring" viewBox="0 0 26 26"><circle class="t" cx="13" cy="13" r="10.5"/><circle class="a" cx="13" cy="13" r="10.5" transform="rotate(-90 13 13)" stroke-dasharray="65.97" stroke-dashoffset="40.90"/></svg>
+              <span class="sat-val odo" data-odo data-base="38" data-min="35" data-max="42" data-dec="0" data-suffix="%">38%</span>
+            </div>
+            <div class="sat sat-th">
+              <svg class="sat-ring" viewBox="0 0 26 26"><circle class="t" cx="13" cy="13" r="10.5"/><circle class="a" cx="13" cy="13" r="10.5" transform="rotate(-90 13 13)" stroke-dasharray="65.97" stroke-dashoffset="21.11"/></svg>
+              <span class="sat-val">cool</span>
+            </div>
+            <!-- scrub legend (appears on hover) -->
+            <div class="scrub-legend">
+              <span><b>THERMAL</b>&nbsp;&nbsp;ok</span>
+              <span class="pa"><b>MEM</b>&nbsp;&nbsp;&minus;12</span>
+              <span><b>CPU</b>&nbsp;&nbsp;&minus;0</span>
+            </div>
+          </div>
+          <p class="cluster-desc">Running cool · 14 AI processes · normal pressure.</p>
+        </div>
+
+        <hr class="sep">
+
+        <!-- 3 · QUAD VITALS -->
+        <div class="quad">
+          <!-- CPU -->
+          <div class="tile">
+            <div class="tile-head">
+              <svg class="mini-ring" viewBox="0 0 16 16"><circle class="t" cx="8" cy="8" r="6.5"/><circle class="a" cx="8" cy="8" r="6.5" transform="rotate(-90 8 8)" stroke-dasharray="40.84" stroke-dashoffset="24.10"/></svg>
+              <span class="tile-val odo" data-odo data-base="41" data-min="38" data-max="45" data-dec="0" data-suffix="%">41%</span>
+              <span class="tile-badge">8P+2E</span>
+            </div>
+            <div class="tile-foot">
+              <span class="tile-sub">load&nbsp;<span class="num odo" data-odo data-base="1.84" data-min="1.55" data-max="2.20" data-dec="2">1.84</span></span>
+              <span class="spark">
+                <i style="height:7px"></i><i style="height:10px"></i><i style="height:6px"></i><i style="height:11px"></i><i style="height:8px"></i><i style="height:9px"></i><i class="am" style="height:12px"></i><i class="rd" style="height:13px"></i>
+              </span>
+            </div>
+          </div>
+          <!-- MEMORY (the problem → amber wash) -->
+          <div class="tile amber-tile">
+            <div class="tile-head">
+              <svg class="mini-ring" viewBox="0 0 16 16"><circle class="t" cx="8" cy="8" r="6.5"/><circle class="a amber" cx="8" cy="8" r="6.5" transform="rotate(-90 8 8)" stroke-dasharray="40.84" stroke-dashoffset="9.80"/></svg>
+              <span class="tile-val odo" data-odo data-base="76" data-min="73" data-max="80" data-dec="0" data-suffix="%">76%</span>
+              <span class="dot amber" style="margin-left:auto"></span>
+            </div>
+            <div class="tile-foot">
+              <span class="tile-sub"><span class="num odo" data-odo data-base="24.1" data-min="23.4" data-max="25.2" data-dec="1">24.1</span>/32&nbsp;GB</span>
+              <span class="tile-sub amber">swap&nbsp;<span class="num">2.1</span></span>
+            </div>
+          </div>
+          <!-- THERMAL (null temp demo) -->
+          <div class="tile">
+            <div class="tile-head">
+              <svg class="mini-ring" viewBox="0 0 16 16"><circle class="t" cx="8" cy="8" r="6.5"/><circle class="a" cx="8" cy="8" r="6.5" transform="rotate(-90 8 8)" stroke-dasharray="40.84" stroke-dashoffset="26.55"/></svg>
+              <span class="tile-val null">—</span>
+              <span class="tile-glyphs" style="margin-left:auto">
+                <svg class="ic bolt" viewBox="0 0 8 12"><path fill="currentColor" d="M4.6 0 0 7h2.8l-.6 5L8 4.6H4.9z"/></svg>
+                <svg class="ic glyph" viewBox="0 0 12 12"><g stroke="currentColor" stroke-width="1.1" stroke-linecap="round"><line x1="2" y1="4" x2="10" y2="4"/><line x1="2" y1="6.5" x2="10" y2="6.5"/><line x1="3" y1="9" x2="9" y2="9"/></g></svg>
+              </span>
+            </div>
+            <div class="tile-foot">
+              <span class="tile-sub">normal</span>
+              <span class="tile-sub" style="color:var(--text-3)">no sensor</span>
+            </div>
+          </div>
+          <!-- BATTERY -->
+          <div class="tile">
+            <div class="tile-head">
+              <svg class="mini-ring" viewBox="0 0 16 16"><circle class="t" cx="8" cy="8" r="6.5"/><circle class="a green" cx="8" cy="8" r="6.5" transform="rotate(-90 8 8)" stroke-dasharray="40.84" stroke-dashoffset="2.86"/></svg>
+              <span class="tile-val odo" data-odo data-base="93" data-min="91" data-max="95" data-dec="0" data-suffix="%">93%</span>
+              <svg class="ic bolt" viewBox="0 0 8 12" style="margin-left:auto"><path fill="currentColor" d="M4.6 0 0 7h2.8l-.6 5L8 4.6H4.9z"/></svg>
+            </div>
+            <div class="tile-foot">
+              <!-- amber temp (warm) per brief -->
+              <span class="tile-sub amber"><span class="num odo" data-odo data-base="34.2" data-min="33.9" data-max="35.1" data-dec="1" data-suffix="°C">34.2°C</span></span>
+              <span class="tile-sub" style="color:var(--text-3)">cyc&nbsp;<span class="num">312</span></span>
+            </div>
+          </div>
+        </div>
+
+        <hr class="sep">
+
+        <!-- 4 · ON FIRE -->
+        <div class="fire-card">
+          <div class="card-h"><span class="hot">ON&nbsp;FIRE</span>&nbsp;· 3 shown · 187% total</div>
+          <div class="proc-row hot">
+            <span class="rank">1</span>
+            <span class="cmd"><span class="pname">node</span><span class="ppath">…/mcp-server/index.js</span>
+              <svg class="flame" viewBox="0 0 12 12"><path fill="currentColor" d="M6.2.4c.5 1.7-.4 2.6-1 3.2-.5-.4-.7-1.2-.5-2-.9.7-1.9 1.9-1.9 3.6A3.3 3.3 0 0 0 9.5 6.4c0-1.4-.7-2.4-1.2-3-.2.6-.6.9-.9 1C7.8 3 7.2 1.3 6.2.4Z"/></svg>
+            </span>
+            <span class="meter red" style="--m:95%"></span>
+            <span class="pcpu red odo" data-odo data-base="142.0" data-min="136" data-max="148" data-dec="1" data-suffix="%">142.0%</span>
+            <span class="pmeta">512M·4m</span>
+            <span class="kill-btn">Kill</span>
+          </div>
+          <div class="proc-row hot">
+            <span class="rank">2</span>
+            <span class="cmd"><span class="pname">Python</span><span class="ppath">…/torch/train.py</span>
+              <svg class="flame" viewBox="0 0 12 12"><path fill="currentColor" d="M6.2.4c.5 1.7-.4 2.6-1 3.2-.5-.4-.7-1.2-.5-2-.9.7-1.9 1.9-1.9 3.6A3.3 3.3 0 0 0 9.5 6.4c0-1.4-.7-2.4-1.2-3-.2.6-.6.9-.9 1C7.8 3 7.2 1.3 6.2.4Z"/></svg>
+            </span>
+            <span class="meter red" style="--m:60%"></span>
+            <span class="pcpu red odo" data-odo data-base="88.0" data-min="83" data-max="93" data-dec="1" data-suffix="%">88.0%</span>
+            <span class="pmeta">2.4G·18m</span>
+          </div>
+          <div class="proc-row">
+            <span class="rank">3</span>
+            <span class="cmd"><span class="pname">WindowServer</span></span>
+            <span class="meter" style="--m:15%"></span>
+            <span class="pcpu odo" data-odo data-base="22.0" data-min="18" data-max="27" data-dec="1" data-suffix="%">22.0%</span>
+            <span class="pmeta">88M·2h</span>
+          </div>
+        </div>
+
+        <hr class="sep">
+
+        <!-- 5 · AI SESSIONS -->
+        <div class="card-h" style="padding-left:6px;padding-bottom:6px"><span style="color:var(--text-2)">AI&nbsp;SESSIONS</span>&nbsp;· 6 families · 102 procs · 4.1 GB</div>
+        <div class="ai-row">
+          <span class="kdot claude"></span>
+          <div class="ai-id"><div class="ai-name">claude</div><div class="ai-meta">4 procs · 1.8 GB · <span class="odo" data-odo data-base="12" data-min="10" data-max="15" data-dec="0" data-suffix="%">12%</span> · idle 2m</div></div>
+          <span class="gauge green" style="--g:24%"></span>
+          <span class="reap-verb">Keep</span>
+        </div>
+        <div class="ai-row flag">
+          <span class="kdot node"></span>
+          <div class="ai-id"><div class="ai-name">node</div><div class="ai-meta">74 procs · 1.4 GB · <span class="odo" data-odo data-base="31" data-min="27" data-max="36" data-dec="0" data-suffix="%">31%</span> · idle 41m</div></div>
+          <span class="gauge red" style="--g:92%"></span>
+          <span class="reap-verb">Reap</span>
+        </div>
+        <div class="ai-row">
+          <span class="kdot codex"></span>
+          <div class="ai-id"><div class="ai-name">codex</div><div class="ai-meta">3 procs · 0.6 GB · <span class="odo" data-odo data-base="4" data-min="3" data-max="7" data-dec="0" data-suffix="%">4%</span> · idle 38m</div></div>
+          <span class="gauge red" style="--g:85%"></span>
+          <span class="reap-verb">Reap</span>
+        </div>
+
+        <!-- 6 · ACTION FOOTER -->
+        <div class="footer">
+          <div class="foot-row">
+            <div class="reap-cap">
+              <svg class="snow" viewBox="0 0 14 14"><g stroke="currentColor" stroke-width="1.1" stroke-linecap="round"><line x1="7" y1="1" x2="7" y2="13"/><line x1="1.8" y1="4" x2="12.2" y2="10"/><line x1="12.2" y1="4" x2="1.8" y2="10"/></g></svg>
+              Reap idle AI
+              <span class="reap-badge">6</span>
+              <span class="reap-tip">would reap 6</span>
+            </div>
+            <div class="foot-icons">
+              <div class="ibtn" title="Purge memory">
+                <svg class="ic" viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/><g stroke="currentColor" stroke-width="1.2"><line x1="6.2" y1="1.8" x2="6.2" y2="3.4"/><line x1="9.8" y1="1.8" x2="9.8" y2="3.4"/><line x1="6.2" y1="12.6" x2="6.2" y2="14.2"/><line x1="9.8" y1="12.6" x2="9.8" y2="14.2"/><line x1="1.8" y1="6.2" x2="3.4" y2="6.2"/><line x1="1.8" y1="9.8" x2="3.4" y2="9.8"/><line x1="12.6" y1="6.2" x2="14.2" y2="6.2"/><line x1="12.6" y1="9.8" x2="14.2" y2="9.8"/></g></svg>
+              </div>
+              <div class="ibtn" title="Open cool watch">
+                <svg class="ic" viewBox="0 0 16 16"><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="1.5" y1="8" x2="1.5" y2="8"/><line x1="4" y1="5.5" x2="4" y2="10.5"/><line x1="6.5" y1="2.5" x2="6.5" y2="13.5"/><line x1="9" y1="4.5" x2="9" y2="11.5"/><line x1="11.5" y1="6" x2="11.5" y2="10"/><line x1="14.2" y1="7.2" x2="14.2" y2="8.8"/></g></svg>
+              </div>
+              <div class="ibtn" title="Refresh">
+                <svg class="ic" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M13 2.5V5.2H10.3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+            </div>
+          </div>
+          <div class="foot-meta">
+            <span class="live"></span>
+            <span>arm64 · macOS 26.2 · 8P+2E · sampled 2s ago</span>
+          </div>
+        </div>
+
+      </div><!-- /popover -->
+    </div><!-- /desktop -->
+    <figcaption>Dark — primary</figcaption>
+  </figure>
+
+  <!-- ============ LIGHT — cloned by JS into here ============ -->
+  <figure class="stage stage-light">
+    <div class="light-mount"></div>
+    <figcaption>Light</figcaption>
+  </figure>
+</div>
+
+<!-- ============ TARGET MODE (static demo) ============ -->
+<div class="target-wrap">
+  <div class="popover theme-dark target-card">
+    <div class="tm-h">TARGET&nbsp;MODE&nbsp;<span class="opt">·&nbsp;⌥ held</span></div>
+    <div class="tm-panel">
+      <div class="tm-row">
+        <span class="tm-badge">1</span>
+        <span class="tm-name"><span class="pname">node</span><span class="ppath">…/mcp-server/index.js</span></span>
+        <span class="tm-verb">Kill</span>
+      </div>
+      <div class="tm-row">
+        <span class="tm-badge">2</span>
+        <span class="tm-name"><span class="pname">Python</span><span class="ppath">…/torch/train.py</span></span>
+        <span class="tm-verb">Kill</span>
+      </div>
+      <div class="tm-row">
+        <span class="tm-badge">3</span>
+        <span class="tm-name"><span class="pname">WindowServer</span></span>
+        <span class="tm-verb">Kill</span>
+      </div>
+      <div class="tm-row">
+        <span class="tm-badge">4</span>
+        <span class="tm-name"><span class="kdot claude"></span><span class="pname">claude</span><span class="ppath" style="direction:ltr">· 4 procs idle 2m</span></span>
+        <span class="tm-verb amber">Reap</span>
+      </div>
+      <div class="tm-row">
+        <span class="tm-badge">5</span>
+        <span class="tm-name"><span class="kdot node"></span><span class="pname">node</span><span class="ppath" style="direction:ltr">· 74 procs idle 41m</span></span>
+        <span class="tm-verb amber">Reap</span>
+      </div>
+      <div class="tm-row">
+        <span class="tm-badge">6</span>
+        <span class="tm-name"><span class="kdot codex"></span><span class="pname">codex</span><span class="ppath" style="direction:ltr">· 3 procs idle 38m</span></span>
+        <span class="tm-verb amber">Reap</span>
+      </div>
+    </div>
+    <div class="confirm-chip">
+      Kill PID <span style="font-weight:600">17923</span> (node)?
+      <span class="ret">⏎</span>
+    </div>
+    <div class="tm-hint"><span class="kbd">⌥</span> release to fire · <span class="kbd">1</span>–<span class="kbd">9</span> to lock</div>
+  </div>
+</div>
+
+<p class="foothint">Hover the 128px health ring to scrub the four metrics · every numeral refreshes odometer-style every 2s</p>
+
+<script>
+(function(){
+  "use strict";
+  var SVGNS = "http://www.w3.org/2000/svg";
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- clone the dark desktop into the light stage ---------- */
+  var src = document.getElementById("desk-src");
+  var mount = document.querySelector(".light-mount");
+  if (src && mount) {
+    var clone = src.cloneNode(true);
+    clone.removeAttribute("id");
+    clone.classList.add("is-light");
+    var pop = clone.querySelector(".popover");
+    pop.classList.remove("theme-dark");
+    pop.classList.add("theme-light");
+    mount.parentNode.replaceChild(clone, mount);
+  }
+
+  /* ---------- odometer ---------- */
+  function ce(tag, cls){ var e=document.createElement(tag); if(cls) e.className=cls; return e; }
+  function layoutKey(s){ return s.replace(/[0-9]/g,"#"); }
+
+  function renderOdo(el, str){
+    el.classList.add("odo");
+    if (el._key !== layoutKey(str)){
+      el.innerHTML = "";
+      el._cells = [];
+      for (var i=0;i<str.length;i++){
+        var ch = str.charAt(i);
+        if (ch>="0" && ch<="9"){
+          var cell = ce("span","od-cell");
+          var strip = ce("span","od-strip");
+          for (var d=0; d<10; d++){ var g=ce("span"); g.textContent=d; strip.appendChild(g); }
+          cell.appendChild(strip);
+          el.appendChild(cell);
+          el._cells.push({digit:true, strip:strip});
+        } else {
+          var sep = ce("span","od-sep");
+          sep.textContent = ch;
+          el.appendChild(sep);
+          el._cells.push({digit:false, el:sep});
+        }
+      }
+      el._key = layoutKey(str);
+      el._init = false;
+    }
+    for (var j=0;j<str.length;j++){
+      var c = el._cells[j], k = str.charAt(j);
+      if (c.digit){
+        var n = +k;
+        if (!el._init){
+          c.strip.style.transition = "none";
+          c.strip.style.transform = "translateY(-"+n+"em)";
+          void c.strip.offsetHeight;        /* commit */
+          c.strip.style.transition = "";
+        } else {
+          c.strip.style.transform = "translateY(-"+n+"em)";
+        }
+      } else if (c.el.textContent !== k){
+        c.el.textContent = k;
+      }
+    }
+    el._init = true;
+  }
+
+  var odos = [];
+  Array.prototype.forEach.call(document.querySelectorAll("[data-odo]"), function(el){
+    var o = {
+      el: el,
+      base: parseFloat(el.getAttribute("data-base")),
+      min: parseFloat(el.getAttribute("data-min")),
+      max: parseFloat(el.getAttribute("data-max")),
+      dec: parseInt(el.getAttribute("data-dec"),10) || 0,
+      suffix: el.getAttribute("data-suffix") || "",
+      hero: el.hasAttribute("data-hero")
+    };
+    o.cur = o.base;
+    odos.push(o);
+    renderOdo(el, o.cur.toFixed(o.dec) + o.suffix);
+  });
+
+  function tick(){
+    for (var i=0;i<odos.length;i++){
+      var o = odos[i];
+      /* hero is owned by scrub interaction while hovering */
+      if (o.hero){
+        var p = o.el.closest(".popover");
+        if (p && p.classList.contains("scrubbing")) continue;
+      }
+      var span = o.max - o.min;
+      var next = o.cur + (Math.random()*2-1)*span*0.20 + (o.base - o.cur)*0.18;
+      if (next < o.min) next = o.min;
+      if (next > o.max) next = o.max;
+      o.cur = next;
+      renderOdo(o.el, o.cur.toFixed(o.dec) + o.suffix);
+    }
+  }
+  setInterval(tick, 2000);
+
+  /* ---------- hero ring ticks ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll(".hero-ticks"), function(g){
+    for (var i=0;i<10;i++){
+      var a = i*36 * Math.PI/180;
+      var r1=61, r2=56.5;
+      var ln = document.createElementNS(SVGNS,"line");
+      ln.setAttribute("x1", (64 + r1*Math.sin(a)).toFixed(2));
+      ln.setAttribute("y1", (64 - r1*Math.cos(a)).toFixed(2));
+      ln.setAttribute("x2", (64 + r2*Math.sin(a)).toFixed(2));
+      ln.setAttribute("y2", (64 - r2*Math.cos(a)).toFixed(2));
+      ln.setAttribute("class","tick");
+      g.appendChild(ln);
+    }
+  });
+
+  /* ---------- scrub interaction on the hero ring ---------- */
+  var REST = 295.2; /* angle of the 82% index */
+  var CARD = {
+    0:   { val:"cool", word:true,  cls:"cyan",  label:"THERMAL · ", verdict:"ok" },
+    90:  { val:"41%",  word:false, cls:"green", label:"CPU · ",     verdict:"light" },
+    180: { val:"76%",  word:false, cls:"amber", label:"MEMORY · ",  verdict:"tight" },
+    270: { val:"6",    word:false, cls:"amber", label:"AI · ",      verdict:"idle" }
+  };
+  function nearest(theta){
+    var cards=[0,90,180,270], best=0, bd=1e9;
+    for (var i=0;i<cards.length;i++){
+      var d=Math.abs(theta-cards[i]); d=Math.min(d,360-d);
+      if (d<bd){ bd=d; best=cards[i]; }
+    }
+    return best;
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll(".hero-ring"), function(ring){
+    var pop    = ring.closest(".popover");
+    var needle = ring.querySelector(".needle");
+    var bv     = ring.querySelector(".bore-val");
+    var bs     = ring.querySelector(".bore-sub");
+    var bl     = ring.querySelector(".bore-label");
+    var curCard = null;
+
+    function setNeedle(angle){ needle.style.transform = "rotate("+angle+"deg)"; }
+
+    function showCard(card){
+      if (card === curCard) return;
+      curCard = card;
+      var m = CARD[card];
+      bv.classList.add("fading"); bl.classList.add("fading");
+      setTimeout(function(){
+        bv._init = false;
+        renderOdo(bv, m.val);
+        bv.className = "bore-val odo" + (m.word?" word":"") + " " + m.cls;
+        bv._init = true;
+        if (bs) bs.style.opacity = "0";
+        bl.innerHTML = m.label + '<span class="verdict">' + m.verdict + '</span>';
+        bl.className = "bore-label scrub " + m.cls;
+        bv.classList.remove("fading"); bl.classList.remove("fading");
+      }, 110);
+    }
+
+    ring.addEventListener("mouseenter", function(){
+      needle.classList.remove("spring");
+      pop.classList.add("scrubbing");
+    });
+    ring.addEventListener("mousemove", function(e){
+      var r = ring.getBoundingClientRect();
+      var cx = r.left + r.width/2, cy = r.top + r.height/2;
+      var ang = Math.atan2(e.clientY-cy, e.clientX-cx) * 180/Math.PI; /* 0 = +x */
+      var theta = (ang + 90 + 360) % 360;                            /* clockwise from top */
+      if (reduce){
+        var c = nearest(theta);
+        setNeedle(c);
+        showCard(c);
+      } else {
+        setNeedle(theta);
+        showCard(nearest(theta));
+      }
+    });
+    ring.addEventListener("mouseleave", function(){
+      pop.classList.remove("scrubbing");
+      curCard = null;
+      needle.classList.add("spring");
+      setNeedle(REST);
+      bv.classList.add("fading"); bl.classList.add("fading");
+      setTimeout(function(){
+        bv._init = false;
+        renderOdo(bv, "82");
+        bv.className = "bore-val odo green";
+        bv._init = true;
+        if (bs) bs.style.opacity = "";
+        bl.textContent = "HEALTH";
+        bl.className = "bore-label";
+        bv.classList.remove("fading"); bl.classList.remove("fading");
+      }, 110);
+    });
+
+    setNeedle(REST);
+    if (reduce) needle.style.transition = "none";
+  });
+
+})();
+</script>
+</body>
+</html>

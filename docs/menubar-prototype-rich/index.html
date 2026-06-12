@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coolant · Mac 退烧</title>
+<style>
+:root{
+  --font-sans:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Inter',system-ui,sans-serif;
+  --font-mono:ui-monospace,'SF Mono','JetBrains Mono','IBM Plex Mono',Menlo,monospace;
+  --green:#34C759; --amber:#FF9F0A; --red:#FF453A; --cyan:#64D2FF;
+  --blue:#0A84FF; --magenta:#FF6FD8; --kgreen:#30D158;
+  --fg:rgba(255,255,255,0.92); --fg2:rgba(255,255,255,0.56); --fg3:rgba(255,255,255,0.34);
+  --hairline:rgba(255,255,255,0.09);
+  --card-bg:rgba(28,28,30,0.82);
+  --card-border:rgba(255,255,255,0.10);
+  --hdr-bg:rgba(28,28,30,0.92);
+  --chip-bg:rgba(255,255,255,0.05);
+  --chip-bg-hover:rgba(255,255,255,0.09);
+  --btn-hover:rgba(255,255,255,0.15);
+  --track:rgba(255,255,255,0.08);
+  --bar-neutral:rgba(255,255,255,0.30);
+  --mb-bg:rgba(0,0,0,0.30); --mb-fg:rgba(255,255,255,0.92);
+  --top-hi:inset 0 1px 0 rgba(255,255,255,0.10);
+}
+html.light{
+  --fg:rgba(0,0,0,0.86); --fg2:rgba(0,0,0,0.5); --fg3:rgba(0,0,0,0.34);
+  --hairline:rgba(0,0,0,0.08);
+  --card-bg:rgba(255,255,255,0.70);
+  --card-border:rgba(255,255,255,0.7);
+  --hdr-bg:rgba(255,255,255,0.82);
+  --chip-bg:rgba(0,0,0,0.04);
+  --chip-bg-hover:rgba(0,0,0,0.07);
+  --btn-hover:rgba(0,0,0,0.10);
+  --track:rgba(0,0,0,0.09);
+  --bar-neutral:rgba(0,0,0,0.34);
+  --mb-bg:rgba(255,255,255,0.55); --mb-fg:rgba(0,0,0,0.85);
+  --top-hi:inset 0 1px 0 rgba(255,255,255,0.7);
+}
+*{box-sizing:border-box;}
+body{
+  margin:0; height:100vh; overflow:hidden;
+  font-family:var(--font-sans); color:var(--fg);
+  background:
+    radial-gradient(60% 50% at 18% 8%, rgba(40,92,175,0.55), transparent 60%),
+    radial-gradient(50% 45% at 88% 16%, rgba(150,40,115,0.42), transparent 55%),
+    radial-gradient(55% 50% at 62% 96%, rgba(20,122,142,0.46), transparent 60%),
+    radial-gradient(45% 45% at 8% 82%, rgba(82,42,150,0.40), transparent 55%),
+    linear-gradient(155deg,#0a0d18,#0c1020 55%,#140f1e);
+  background-attachment:fixed;
+}
+html.light body{
+  background:
+    radial-gradient(60% 50% at 18% 8%, rgba(130,175,255,0.65), transparent 60%),
+    radial-gradient(50% 45% at 88% 16%, rgba(255,185,215,0.55), transparent 55%),
+    radial-gradient(55% 50% at 62% 96%, rgba(160,222,232,0.6), transparent 60%),
+    radial-gradient(45% 45% at 8% 82%, rgba(205,185,255,0.55), transparent 55%),
+    linear-gradient(155deg,#dfe7f5,#eef1f8 55%,#f3eef7);
+  background-attachment:fixed;
+}
+.m{font-family:var(--font-mono);}
+
+/* ───────── menu bar ───────── */
+.menubar{
+  position:fixed; top:0; left:0; right:0; height:24px; z-index:50;
+  display:flex; align-items:center; padding:0 10px;
+  font:500 13px/1 var(--font-sans); color:var(--mb-fg);
+  background:var(--mb-bg);
+  -webkit-backdrop-filter:blur(30px) saturate(1.4); backdrop-filter:blur(30px) saturate(1.4);
+  border-bottom:0.5px solid rgba(127,127,127,0.18);
+}
+.mb-left{display:flex; align-items:center; gap:15px;}
+.apple{width:13px; height:15px; display:block; fill:var(--mb-fg);}
+.mb-app-name{font-weight:700; letter-spacing:-0.01em;}
+.mb-menu{opacity:.78; font-size:12.5px;}
+.mb-right{margin-left:auto; display:flex; align-items:center; gap:13px;}
+.mb-glyph{width:15px; height:15px; opacity:.86; display:block;}
+.mb-clock{font-size:12.5px; font-variant-numeric:tabular-nums;}
+.mb-theme{background:transparent; border:0; padding:0; color:var(--mb-fg); cursor:pointer; width:16px; height:16px; opacity:.86; display:grid; place-items:center;}
+.mb-theme svg{width:15px; height:15px;}
+.mb-theme:hover{opacity:1;}
+.mb-app{display:flex; align-items:center; gap:5px; padding:2px 7px; margin-right:-3px; border-radius:6px; background:rgba(127,127,127,0.20); cursor:default;}
+.mb-ring{width:14px; height:14px;}
+.mb-temp{font:600 12px/1 var(--font-mono); font-variant-numeric:tabular-nums;}
+
+/* ───────── glass panel ───────── */
+.panel{
+  position:fixed; top:31px; right:12px; width:380px;
+  max-height:calc(100vh - 46px); overflow-y:auto;
+  border-radius:16px;
+  background:var(--card-bg);
+  -webkit-backdrop-filter:blur(40px) saturate(1.5); backdrop-filter:blur(40px) saturate(1.5);
+  box-shadow:0 20px 60px rgba(0,0,0,0.55), var(--top-hi);
+  border:0.5px solid var(--card-border);
+  animation:panelIn .5s cubic-bezier(.2,.8,.2,1) both;
+  transform-origin:top right;
+  z-index:40;
+}
+@keyframes panelIn{from{opacity:0; transform:translateY(-10px) scale(.975);} to{opacity:1; transform:none;}}
+.panel::-webkit-scrollbar{width:8px;}
+.panel::-webkit-scrollbar-thumb{background:rgba(127,127,127,0.28); border-radius:4px; border:2px solid transparent; background-clip:padding-box;}
+.panel::-webkit-scrollbar-track{background:transparent;}
+
+/* ───────── header ───────── */
+.hdr{
+  position:sticky; top:0; z-index:6;
+  display:flex; align-items:center; gap:10px; padding:12px 14px;
+  background:var(--hdr-bg);
+  -webkit-backdrop-filter:blur(20px); backdrop-filter:blur(20px);
+  border-bottom:0.5px solid var(--hairline);
+  border-radius:16px 16px 0 0;
+}
+.snow{width:30px; height:30px; flex:none; border-radius:9px; display:grid; place-items:center; font-size:16px;
+  background:color-mix(in oklab, var(--cyan) 20%, transparent);}
+.hdr-tt{min-width:0;}
+.hdr-title{font:600 13.5px/1.1 var(--font-sans); color:var(--fg); letter-spacing:-0.01em; white-space:nowrap;}
+.hdr-sub{margin-top:3px; font:500 10px/1 var(--font-mono); color:var(--fg3);}
+.hdr-r{margin-left:auto; display:flex; align-items:center; gap:3px;}
+.hdr-time{font:500 10.5px/1 var(--font-mono); color:var(--fg2); margin-right:4px; font-variant-numeric:tabular-nums; white-space:nowrap;}
+.iconbtn{width:28px; height:28px; border-radius:8px; display:grid; place-items:center; color:var(--fg2);
+  background:transparent; border:0; cursor:pointer; transition:.15s; flex:none;}
+.iconbtn:hover{background:var(--chip-bg-hover); color:var(--fg);}
+.iconbtn:active{transform:scale(.92);}
+.iconbtn svg{width:16px; height:16px;}
+.iconbtn.lg{width:34px; height:34px; border:0.5px solid var(--hairline); background:var(--chip-bg);}
+.iconbtn.lg:hover{background:var(--chip-bg-hover);}
+
+/* ───────── hero ───────── */
+.hero{
+  margin:14px 14px 0; padding:14px 16px 15px; border-radius:14px; position:relative; overflow:hidden;
+  background:
+    radial-gradient(130% 150% at 0% 0%, rgba(100,210,255,0.18), transparent 55%),
+    radial-gradient(130% 150% at 100% 100%, rgba(255,69,58,0.20), transparent 55%),
+    linear-gradient(135deg, rgba(255,255,255,0.055), rgba(255,255,255,0.02));
+  border:0.5px solid var(--hairline);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.06);
+}
+.hero-meta{position:absolute; top:13px; right:14px; font:500 9.5px/1 var(--font-mono); color:var(--fg3); text-align:right;}
+.hero-num-wrap{display:flex; align-items:flex-end; gap:9px;}
+.hero-num{
+  font:600 53px/0.9 var(--font-mono); font-variant-numeric:tabular-nums; letter-spacing:-2px;
+  background:linear-gradient(118deg,#64D2FF 0%,#5AC8FA 16%,#FFD60A 54%,#FF9F0A 74%,#FF453A 100%);
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; color:transparent;
+  filter:drop-shadow(0 2px 16px rgba(255,90,60,0.28));
+  display:inline-block;
+}
+.hero-unit{font:500 13px/1.3 var(--font-sans); color:var(--fg2); padding-bottom:7px;}
+.hero-mem{margin-top:7px; font:500 14px/1.3 var(--font-sans); color:var(--fg2);}
+.hero-mem .strong{color:var(--fg); font-weight:600;}
+.hero-witty{
+  margin-top:12px; padding:8px 11px; border-radius:10px;
+  background:var(--chip-bg); border:0.5px solid var(--hairline);
+  font:500 11.5px/1.55 var(--font-sans); color:var(--fg2);
+}
+.hero-witty b{color:var(--fg); font-weight:600; font-family:var(--font-mono);}
+
+/* ───────── stat chips ───────── */
+.chips{display:flex; gap:7px; padding:13px 14px;}
+.chip{flex:1; min-width:0; padding:8px 8px 9px; border-radius:11px; background:var(--chip-bg); border:0.5px solid var(--hairline);}
+.chip-l{font:600 9px/1 var(--font-sans); letter-spacing:0.06em; text-transform:uppercase; color:var(--fg3);}
+.chip-v{margin-top:7px; font:600 14px/1 var(--font-mono); font-variant-numeric:tabular-nums; white-space:nowrap;}
+
+/* ───────── section frame ───────── */
+.sec{padding:13px 14px; border-top:0.5px solid var(--hairline);}
+.sec-h{display:flex; align-items:center; gap:6px; margin-bottom:11px;}
+.sec-t{font:600 12px/1 var(--font-sans); color:var(--fg); letter-spacing:0.01em;}
+.sec-m{margin-left:auto; font:500 10px/1 var(--font-mono); color:var(--fg3); font-variant-numeric:tabular-nums;}
+.sec-ic{width:14px; height:14px; color:var(--fg3); display:block;}
+
+/* ───────── diagnostics badges ───────── */
+.badges{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+.badge{display:flex; gap:9px; align-items:center; padding:9px 10px; border-radius:11px;
+  background:var(--chip-bg); border:0.5px solid var(--hairline); cursor:pointer; transition:.15s; min-width:0;}
+.badge:hover{background:var(--chip-bg-hover); transform:translateY(-1px); box-shadow:0 4px 14px rgba(0,0,0,0.18);}
+.badge:active{transform:translateY(0);}
+.b-ic{width:30px; height:30px; flex:none; border-radius:9px; display:grid; place-items:center; font-size:15px; background:var(--chip-bg-hover);}
+.badge[data-tone=red] .b-ic{background:color-mix(in oklab, var(--red) 24%, transparent);}
+.badge[data-tone=amber] .b-ic{background:color-mix(in oklab, var(--amber) 24%, transparent);}
+.badge[data-tone=green] .b-ic{background:color-mix(in oklab, var(--green) 24%, transparent);}
+.b-tx{min-width:0;}
+.b-t{font:600 12px/1.2 var(--font-sans); color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.b-s{margin-top:2px; font:500 10px/1.3 var(--font-sans); color:var(--fg2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+
+/* ───────── core load bars ───────── */
+.cores{display:flex; gap:5px; align-items:flex-end;}
+.core{flex:1; display:flex; flex-direction:column; align-items:center; gap:5px;}
+.ctrack{width:100%; height:46px; border-radius:5px; background:var(--track); position:relative; overflow:hidden;}
+.cfill{position:absolute; left:0; right:0; bottom:0; border-radius:5px;
+  transition:height .55s cubic-bezier(.4,0,.2,1), background .4s;}
+.clab{font:600 9px/1 var(--font-mono); color:var(--fg3);}
+.core-foot{display:flex; justify-content:space-between; margin-top:9px; font:500 10px/1 var(--font-mono); color:var(--fg3);}
+
+/* ───────── horizontal bar rows ───────── */
+.row{padding:7px 6px; margin:0 -6px; border-radius:9px; transition:background .15s;}
+.row:hover{background:var(--chip-bg);}
+.row+.row{margin-top:1px;}
+.row-top{display:flex; align-items:center; gap:7px; margin-bottom:6px;}
+.dot{width:7px; height:7px; border-radius:50%; flex:none;}
+.row-name{font:500 12px/1 var(--font-sans); color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0;}
+.row-name.hot{color:var(--red);}
+.row-val{margin-left:auto; font:500 10.5px/1 var(--font-mono); color:var(--fg2); font-variant-numeric:tabular-nums; white-space:nowrap; flex:none; padding-left:8px;}
+.bar{height:6px; border-radius:3px; background:var(--track); overflow:hidden;}
+.bfill{height:100%; border-radius:3px; transition:width .55s cubic-bezier(.4,0,.2,1);}
+.row-sub{margin-top:6px; font:500 10px/1 var(--font-mono); color:var(--fg3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+
+/* ───────── hot processes ───────── */
+.proc{padding:8px; margin:0 -8px 1px; border-radius:10px; transition:background .15s;}
+.proc:hover{background:var(--chip-bg);}
+.proc.fire{background:linear-gradient(90deg, color-mix(in oklab, var(--red) 13%, transparent), transparent 82%);}
+.proc.fire:hover{background:linear-gradient(90deg, color-mix(in oklab, var(--red) 19%, transparent), transparent 82%);}
+.ptop{display:flex; align-items:center; gap:8px; margin-bottom:6px;}
+.rank{width:16px; height:16px; flex:none; border-radius:5px; background:var(--chip-bg-hover); display:grid; place-items:center;
+  font:600 10px/1 var(--font-mono); color:var(--fg2);}
+.cmd{flex:1; min-width:0; font:500 11.5px/1 var(--font-mono); color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.flame{flex:none; font-size:12px;}
+.pcpu{flex:none; font:600 12px/1 var(--font-mono); font-variant-numeric:tabular-nums;}
+.psub{font:500 10px/1 var(--font-mono); color:var(--fg3);}
+
+/* ───────── footer ───────── */
+.ftr{
+  position:sticky; bottom:0; z-index:6; padding:11px 14px 12px;
+  border-top:0.5px solid var(--hairline);
+  background:var(--hdr-bg);
+  -webkit-backdrop-filter:blur(20px); backdrop-filter:blur(20px);
+  border-radius:0 0 16px 16px;
+}
+.ftr-row{display:flex; gap:8px; align-items:center;}
+.btn-primary{flex:1; display:flex; align-items:center; justify-content:center; gap:8px; height:34px; border-radius:10px;
+  background:var(--chip-bg-hover); border:0.5px solid var(--hairline); color:var(--fg);
+  font:600 12.5px/1 var(--font-sans); cursor:pointer; transition:.15s;}
+.btn-primary:hover{background:var(--btn-hover); transform:translateY(-1px);}
+.btn-primary:active{transform:translateY(0);}
+.reap-badge{min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:var(--red); color:#fff;
+  font:700 10px/18px var(--font-mono); text-align:center;}
+.ftr-meta{display:flex; align-items:center; gap:7px; margin-top:9px; font:500 10px/1 var(--font-mono); color:var(--fg3); font-variant-numeric:tabular-nums;}
+.live-dot{width:6px; height:6px; border-radius:50%; background:var(--green); flex:none; animation:pulse 2s infinite;}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 color-mix(in oklab, var(--green) 55%, transparent);}
+  70%{box-shadow:0 0 0 6px transparent;}
+  100%{box-shadow:0 0 0 0 transparent;}
+}
+
+/* ───────── confirm + toast ───────── */
+.confirm,.toast{
+  position:fixed; left:50%; bottom:18px; width:344px; max-width:calc(100vw - 32px);
+  transform:translateX(-50%) translateY(14px);
+  padding:11px 14px; border-radius:13px;
+  background:rgba(28,28,30,0.92); -webkit-backdrop-filter:blur(30px) saturate(1.4); backdrop-filter:blur(30px) saturate(1.4);
+  border:0.5px solid rgba(255,255,255,0.12); box-shadow:0 18px 44px rgba(0,0,0,0.5);
+  color:#fff; opacity:0; pointer-events:none; transition:.22s cubic-bezier(.2,.7,.2,1); z-index:80;
+}
+.confirm.show,.toast.show{opacity:1; transform:translateX(-50%) translateY(0); pointer-events:auto;}
+.confirm{display:flex; align-items:center; gap:10px;}
+.confirm-msg{flex:1; font:500 12.5px/1.35 var(--font-sans);}
+.confirm-ok{font:600 11px/1 var(--font-mono); padding:7px 10px; border-radius:8px; background:var(--green); color:#06270f; border:0; cursor:pointer;}
+.confirm-cancel{font:500 11px/1 var(--font-sans); padding:7px 9px; border-radius:8px; background:rgba(255,255,255,0.12); color:#fff; border:0; cursor:pointer;}
+.toast{justify-content:center; text-align:center; font:500 12.5px/1.45 var(--font-sans);}
+</style>
+</head>
+<body>
+
+<!-- ════════ 1 · fake menu bar ════════ -->
+<div class="menubar">
+  <div class="mb-left">
+    <svg class="apple" viewBox="0 0 24 24"><path d="M17.05 12.04c-.03-2.6 2.12-3.85 2.22-3.91-1.21-1.77-3.09-2.01-3.76-2.04-1.6-.16-3.12.94-3.93.94-.81 0-2.06-.92-3.39-.9-1.74.03-3.35 1.01-4.25 2.57-1.81 3.14-.46 7.79 1.3 10.34.86 1.25 1.88 2.65 3.22 2.6 1.29-.05 1.78-.83 3.34-.83 1.56 0 2 .83 3.37.81 1.39-.03 2.27-1.27 3.12-2.53.98-1.45 1.39-2.85 1.41-2.92-.03-.01-2.7-1.04-2.73-4.13zM14.7 4.6c.71-.86 1.19-2.06 1.06-3.25-1.02.04-2.26.68-2.99 1.54-.66.76-1.23 1.98-1.08 3.15 1.14.09 2.3-.58 3.01-1.44z"/></svg>
+    <span class="mb-app-name">Coolant</span>
+    <span class="mb-menu">文件</span>
+    <span class="mb-menu">视图</span>
+    <span class="mb-menu">帮助</span>
+  </div>
+  <div class="mb-right">
+    <svg class="mb-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 12.55a11 11 0 0 1 14 0M8.5 16.11a6 6 0 0 1 7 0M2 8.82a16 16 0 0 1 20 0"/><circle cx="12" cy="20" r="0.6" fill="currentColor"/></svg>
+    <svg class="mb-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="7.5" width="17" height="9" rx="2.2"/><rect x="3" y="9" width="5" height="6" rx="0.6" fill="currentColor" stroke="none"/><path d="M21 10.5v3" stroke-width="2" stroke-linecap="round"/></svg>
+    <svg class="mb-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4.5" width="18" height="6.5" rx="3.25"/><rect x="3" y="13" width="18" height="6.5" rx="3.25"/><circle cx="8" cy="7.75" r="1.5" fill="currentColor"/><circle cx="16" cy="16.25" r="1.5" fill="currentColor"/></svg>
+    <span class="mb-clock" id="mbClock">周二 15:06</span>
+    <button class="mb-theme" id="themeBtn" title="切换浅色 / 深色" aria-label="切换主题"></button>
+    <div class="mb-app" title="Coolant">
+      <svg class="mb-ring" viewBox="0 0 36 36">
+        <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(127,127,127,0.30)" stroke-width="5"/>
+        <circle cx="18" cy="18" r="15" fill="none" stroke="#34C759" stroke-width="5" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="16" transform="rotate(-90 18 18)"/>
+      </svg>
+      <span class="mb-temp" id="mbTemp">30°</span>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ glass panel ════════ -->
+<div class="panel">
+
+  <!-- 2 · header -->
+  <div class="hdr">
+    <div class="snow">❄️</div>
+    <div class="hdr-tt">
+      <div class="hdr-title">Coolant · Mac 退烧</div>
+      <div class="hdr-sub">实时 · 进程归因</div>
+    </div>
+    <div class="hdr-r">
+      <span class="hdr-time" id="hdrTime">更新 15:06:09</span>
+      <button class="iconbtn" id="watchBtn" title="Cool Watch 风扇曲线">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8h2l1.4-4 2 8.4L9 5l1.6 5.2L12 8h3"/></svg>
+      </button>
+      <button class="iconbtn" id="setBtn" title="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <button class="iconbtn" id="quitBtn" title="退出 Coolant">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- 3 · hero -->
+  <div class="hero">
+    <div class="hero-meta">采样于 2s 前<br>已运行 2天 4 小时</div>
+    <div class="hero-num-wrap">
+      <span class="hero-num" id="heroNum">102</span>
+      <span class="hero-unit">个失控<br><span class="m">node</span></span>
+    </div>
+    <div class="hero-mem"><span class="strong m">4.1 GB</span> 被 AI 进程吃掉</div>
+    <div class="hero-witty">💡 ≈ 同时开 <b>41</b> 个 Chrome 标签页 🐘 · 够你的风扇响一整天 🌀</div>
+  </div>
+
+  <!-- 4 · stat chips -->
+  <div class="chips">
+    <div class="chip"><div class="chip-l">健康</div><div class="chip-v" id="cChealth" style="color:var(--green)">83</div></div>
+    <div class="chip"><div class="chip-l">CPU</div><div class="chip-v" id="cCcpu" style="color:var(--cyan)">41%</div></div>
+    <div class="chip"><div class="chip-l">内存</div><div class="chip-v" style="color:var(--amber)">warn</div></div>
+    <div class="chip"><div class="chip-l">电池</div><div class="chip-v" id="cCbatt" style="color:var(--green)">30°C</div></div>
+    <div class="chip"><div class="chip-l">拓扑</div><div class="chip-v">8P+2E</div></div>
+  </div>
+
+  <!-- 5 · diagnostics -->
+  <div class="sec">
+    <div class="sec-h"><span class="sec-t">诊断</span><span class="sec-m">6 命中</span></div>
+    <div class="badges" id="badges"></div>
+  </div>
+
+  <!-- 6 · core load -->
+  <div class="sec">
+    <div class="sec-h"><span class="sec-t">核心负载</span><span class="sec-m" id="corePeak">峰值 P2 63%</span></div>
+    <div class="cores" id="cores"></div>
+    <div class="core-foot"><span>P × 8 性能核</span><span>E × 2 能效核</span></div>
+  </div>
+
+  <!-- 7 · AI CLI families -->
+  <div class="sec">
+    <div class="sec-h"><span class="sec-t">AI CLI 家族</span><span class="sec-m">按 RSS</span></div>
+    <div id="fams"></div>
+  </div>
+
+  <!-- 8 · project footprint -->
+  <div class="sec">
+    <div class="sec-h"><span class="sec-t">项目占用</span>
+      <svg class="sec-ic" style="margin-left:auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+    </div>
+    <div id="projs"></div>
+  </div>
+
+  <!-- 9 · hot processes -->
+  <div class="sec">
+    <div class="sec-h"><span class="sec-t">On Fire</span><span class="sec-m">按 CPU%</span></div>
+    <div id="procs"></div>
+  </div>
+
+  <!-- 10 · footer -->
+  <div class="ftr">
+    <div class="ftr-row">
+      <button class="btn-primary" id="reapBtn"><span>♻&nbsp; Reap idle AI</span><span class="reap-badge" id="footReapBadge">6</span></button>
+      <button class="iconbtn lg" id="purgeBtn" title="Purge inactive memory">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 2.5v2M15 2.5v2M9 19.5v2M15 19.5v2M2.5 9h2M2.5 15h2M19.5 9h2M19.5 15h2" stroke-linecap="round"/></svg>
+      </button>
+      <button class="iconbtn lg" id="watchBtn2" title="Cool Watch">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8h2l1.4-4 2 8.4L9 5l1.6 5.2L12 8h3"/></svg>
+      </button>
+      <button class="iconbtn lg" id="refreshBtn" title="重新采样">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      </button>
+    </div>
+    <div class="ftr-meta"><span class="live-dot"></span><span id="ftrMeta">arm64 · macOS 26.2 · 8P+2E · sampled 2s ago</span></div>
+  </div>
+
+</div>
+
+<!-- floating confirm + toast -->
+<div class="confirm" id="confirm">
+  <span class="confirm-msg" id="confirmMsg"></span>
+  <button class="confirm-ok" id="confirmOk">⏎ 确认</button>
+  <button class="confirm-cancel" id="confirmCancel">esc</button>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const rnd = (a,b) => Math.floor(Math.random()*(b-a+1))+a;
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+const pad = n => String(n).padStart(2,'0');
+function h(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstElementChild; }
+function roll(el){ if(!el) return; try{ el.animate([{transform:'translateY(-0.16em)',opacity:.35},{transform:'translateY(0)',opacity:1}],{duration:280,easing:'cubic-bezier(.2,.7,.2,1)'}); }catch(e){} }
+function setNum(el, v){ if(!el) return; el.textContent=v; roll(el); }
+function pctColor(p){ if(p>=90) return 'var(--red)'; if(p>=75) return 'var(--amber)'; if(p>=50) return 'var(--cyan)'; return 'var(--green)'; }
+
+/* ── live model ── */
+let heroVal=102, cpuVal=41, battVal=30, healthVal=83;
+
+const cores=[
+  {id:'P1',p:49,k:'P'},{id:'P2',p:63,k:'P'},{id:'P3',p:55,k:'P'},{id:'P4',p:34,k:'P'},
+  {id:'P5',p:58,k:'P'},{id:'P6',p:29,k:'P'},{id:'P7',p:51,k:'P'},{id:'P8',p:37,k:'P'},
+  {id:'E1',p:22,k:'E'},{id:'E2',p:16,k:'E'}
+];
+const fams=[
+  {name:'node',   stat:'74 进程 · 1.4 GB · 31%', color:'#0A84FF', w:100},
+  {name:'claude', stat:'4 进程 · 1.8 GB · 12%',  color:'#FF6FD8', w:88},
+  {name:'codex',  stat:'31 进程 · 1.2 GB · 8%',  color:'#30D158', w:72},
+  {name:'droid',  stat:'12 进程 · 0.6 GB · 3%',  color:'#0A84FF', w:40}
+];
+const projs=[
+  {name:'hermes-agent',              rss:'1.5 GB', w:37,  launch:'codex,launchd',      hot:false},
+  {name:'search-boss',               rss:'1.4 GB', w:34,  launch:'cmux,codex,vscode',  hot:false},
+  {name:'(npx: chrome-devtools-mcp)',rss:'4.1 GB', w:100, launch:'claude,codex,droid', hot:true},
+  {name:'cooldown-my-mac',           rss:'0.3 GB', w:8,   launch:'cursor',             hot:false},
+  {name:'toc-c-app-refactor',        rss:'0.2 GB', w:5,   launch:'—',                  hot:false}
+];
+const procs=[
+  {rank:1, cmd:'node …/mcp-server/index.js', cpu:142, lo:132, hi:151, sub:'412 MB · 2h'},
+  {rank:2, cmd:'Python …/torch/train.py',    cpu:88,  lo:81,  hi:95,  sub:'1.2 GB · 18m'},
+  {rank:3, cmd:'WindowServer',               cpu:22,  lo:17,  hi:28,  sub:'380 MB · 2d'}
+];
+const badges=[
+  {ic:'🔥', t:'CPU 烤机',   s:'WindowServer 142%',         tone:'red'},
+  {ic:'🧹', t:'可回收',     s:'6 个闲置 AI 会话',           tone:'amber', reap:true},
+  {ic:'🐘', t:'内存大户',   s:'chrome-devtools-mcp 4.1GB',  tone:'amber'},
+  {ic:'🧟', t:'孤儿进程',   s:'3 个挂在 launchd 下',        tone:'neutral'},
+  {ic:'🌡', t:'体温正常',   s:'电池 30°C',                  tone:'green'},
+  {ic:'😴', t:'睡眠被阻止', s:'displaysleep=0',             tone:'amber'}
+];
+
+/* ── render: cores ── */
+const coreFills=[];
+cores.forEach(c=>{
+  const node=h(`<div class="core" title="${c.id} · ${c.p}%"><div class="ctrack"><div class="cfill"></div></div><div class="clab">${c.k}</div></div>`);
+  const fill=node.querySelector('.cfill');
+  fill.style.height=c.p+'%'; fill.style.background=pctColor(c.p);
+  $('cores').appendChild(node);
+  coreFills.push({fill, node});
+});
+function corePeak(){ let m=cores[0]; cores.forEach(c=>{ if(c.p>m.p) m=c; }); return m; }
+
+/* ── render: families ── */
+fams.forEach(f=>{
+  $('fams').appendChild(h(`<div class="row">
+    <div class="row-top"><span class="dot" style="background:${f.color}"></span><span class="row-name">${f.name}</span><span class="row-val">${f.stat}</span></div>
+    <div class="bar"><div class="bfill" style="width:${f.w}%;background:${f.color}"></div></div></div>`));
+});
+
+/* ── render: projects ── */
+projs.forEach(p=>{
+  const col = p.hot ? 'var(--red)' : 'var(--bar-neutral)';
+  $('projs').appendChild(h(`<div class="row">
+    <div class="row-top"><span class="row-name${p.hot?' hot':''}">${p.name}</span><span class="row-val">${p.rss}</span></div>
+    <div class="bar"><div class="bfill" style="width:${p.w}%;background:${col}"></div></div>
+    <div class="row-sub">${p.launch}</div></div>`));
+});
+
+/* ── render: hot processes ── */
+const procRefs=[];
+procs.forEach(p=>{
+  const fire=p.cpu>=80;
+  const node=h(`<div class="proc${fire?' fire':''}">
+    <div class="ptop"><span class="rank">${p.rank}</span><span class="cmd">${p.cmd}</span><span class="flame">${fire?'🔥':''}</span><span class="pcpu"></span></div>
+    <div class="bar"><div class="bfill"></div></div>
+    <div class="psub">${p.sub}</div></div>`);
+  const cpuEl=node.querySelector('.pcpu'), fill=node.querySelector('.bfill'), flame=node.querySelector('.flame');
+  cpuEl.textContent=p.cpu+'%'; cpuEl.style.color = fire ? 'var(--red)' : 'var(--fg2)';
+  fill.style.width=Math.min(p.cpu/150*100,100)+'%';
+  fill.style.background = fire ? 'var(--red)' : 'var(--bar-neutral)';
+  $('procs').appendChild(node);
+  procRefs.push({p, cpuEl, fill, flame, node});
+});
+
+/* ── render: badges ── */
+badges.forEach(b=>{
+  const node=h(`<div class="badge" data-tone="${b.tone}"><div class="b-ic">${b.ic}</div><div class="b-tx"><div class="b-t">${b.t}</div><div class="b-s">${b.s}</div></div></div>`);
+  if(b.reap){ node.id='reapBadge'; node.onclick=doReap; }
+  else node.onclick=()=>showToast(`${b.ic} ${b.t} · ${b.s}`);
+  $('badges').appendChild(node);
+});
+
+/* ── confirm + toast ── */
+let pendingConfirm=null;
+function showConfirm(msg, onOk){ pendingConfirm=onOk; $('confirmMsg').textContent=msg; $('confirm').classList.add('show'); }
+function hideConfirm(){ $('confirm').classList.remove('show'); pendingConfirm=null; }
+$('confirmOk').onclick=()=>{ const f=pendingConfirm; hideConfirm(); if(f) f(); };
+$('confirmCancel').onclick=hideConfirm;
+let toastTimer;
+function showToast(msg){ $('toast').textContent=msg; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>$('toast').classList.remove('show'),2300); }
+document.addEventListener('keydown',e=>{
+  if(e.key==='Enter' && pendingConfirm){ e.preventDefault(); const f=pendingConfirm; hideConfirm(); f(); }
+  else if(e.key==='Escape' && pendingConfirm){ hideConfirm(); }
+});
+
+/* ── reap flow ── */
+function doReap(){
+  showConfirm('Reap 6 个闲置 AI 会话?', ()=>{
+    const fb=$('footReapBadge'); if(fb) fb.style.display='none';
+    const rb=$('reapBadge');
+    if(rb){
+      rb.dataset.tone='green';
+      rb.querySelector('.b-ic').textContent='🧊';
+      rb.querySelector('.b-t').textContent='已回收';
+      rb.querySelector('.b-s').textContent='释放 1.2 GB · 0 闲置';
+      rb.onclick=()=>showToast('🧊 AI 会话已全部清空');
+    }
+    showToast('🧊 已回收 6 个闲置 AI 会话 · 释放 1.2 GB');
+  });
+}
+
+/* ── button wiring ── */
+$('reapBtn').onclick   = doReap;
+$('purgeBtn').onclick  = ()=>showConfirm('Purge inactive memory (2.1 GB)?', ()=>showToast('🧹 已释放 2.1 GB 闲置内存'));
+$('refreshBtn').onclick= ()=>{ refresh(); showToast('🔄 已重新采样进程快照'); };
+$('watchBtn').onclick  = ()=>showToast('🌀 Cool Watch 已开启 · 实时风扇曲线监控');
+$('watchBtn2').onclick = ()=>showToast('🌀 Cool Watch 已开启 · 实时风扇曲线监控');
+$('setBtn').onclick    = ()=>showToast('⚙️ 打开偏好设置…');
+$('quitBtn').onclick   = ()=>showToast('正在退出 Coolant…');
+
+/* ── theme ── */
+const SUN='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>';
+const MOON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 9 0 0 0 21 12.79z"/></svg>';
+function applyTheme(t){
+  document.documentElement.classList.toggle('light', t==='light');
+  $('themeBtn').innerHTML = t==='light' ? MOON : SUN;
+  try{ localStorage.setItem('coolant-theme', t); }catch(e){}
+}
+$('themeBtn').onclick=()=>applyTheme(document.documentElement.classList.contains('light') ? 'dark' : 'light');
+let savedTheme='dark'; try{ savedTheme=localStorage.getItem('coolant-theme')||'dark'; }catch(e){}
+applyTheme(savedTheme);
+
+/* ── live refresh (odometer @ 2s) ── */
+function refresh(){
+  heroVal   = clamp(heroVal + rnd(-2,2), 96, 110);   setNum($('heroNum'), heroVal);
+  cpuVal    = clamp(cpuVal + rnd(-3,3), 33, 49);      setNum($('cCcpu'), cpuVal+'%');
+  healthVal = clamp(healthVal + rnd(-1,1), 79, 86);   setNum($('cChealth'), healthVal);
+  battVal   = clamp(battVal + rnd(-1,1), 28, 32);
+  setNum($('cCbatt'), battVal+'°C');
+  setNum($('mbTemp'), battVal+'°');
+
+  cores.forEach((c,i)=>{
+    c.p = clamp(c.p + rnd(-5,5), 12, 74);
+    const f=coreFills[i].fill;
+    f.style.height=c.p+'%'; f.style.background=pctColor(c.p);
+    coreFills[i].node.title=`${c.id} · ${c.p}%`;
+  });
+  const pk=corePeak(); setNum($('corePeak'), `峰值 ${pk.id} ${pk.p}%`);
+
+  procRefs.forEach(r=>{
+    r.p.cpu = clamp(r.p.cpu + rnd(-4,4), r.p.lo, r.p.hi);
+    const fire = r.p.cpu>=80;
+    setNum(r.cpuEl, r.p.cpu+'%');
+    r.cpuEl.style.color = fire ? 'var(--red)' : 'var(--fg2)';
+    r.fill.style.width = Math.min(r.p.cpu/150*100,100)+'%';
+    r.fill.style.background = fire ? 'var(--red)' : 'var(--bar-neutral)';
+    r.node.classList.toggle('fire', fire);
+    r.flame.textContent = fire ? '🔥' : '';
+  });
+}
+
+/* ── live clock (1s) ── */
+const WK=['周日','周一','周二','周三','周四','周五','周六'];
+function clock(){
+  const d=new Date(), hh=pad(d.getHours()), mm=pad(d.getMinutes()), ss=pad(d.getSeconds());
+  $('hdrTime').textContent = '更新 '+hh+':'+mm+':'+ss;
+  $('mbClock').textContent = WK[d.getDay()]+' '+hh+':'+mm;
+}
+clock();
+setInterval(clock, 1000);
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

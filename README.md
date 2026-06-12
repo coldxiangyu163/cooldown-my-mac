@@ -218,6 +218,20 @@ rules:
 
 </details>
 
+## 菜单栏 App（Coolant）
+
+不想开终端时，`cool` 现在也有一张脸——一个原生 SwiftUI 菜单栏应用 **Coolant**（在 [`menubar/`](./menubar/)）。
+
+- **常驻一眼**：菜单栏一个健康分环 + CPU/电池温度。健康时是单色 template 图标，安静地融进菜单栏；真出问题（thermal warning / 内存 critical / 单核烤机）才上色变红。
+- **点开是一张毛玻璃仪表盘**：现状 hero 卡（AI 进程数与内存占用，渐变跟随健康状态变色）+ 健康/CPU/内存/电池指标 + 可点击的诊断徽章（烤机 / 可回收 / 内存压力，一点直达处置）+ 核心负载 + AI CLI 家族与项目占用排行 + 热进程。一键回收闲置 AI / 清理内存 / 打开 `cool watch`，所有破坏性操作都先弹确认条。深浅色全自适应；上次采样落盘缓存，点开秒显。
+- **同一个数据源**：菜单栏只画图，所有读数都 shell out 调 `cool ... --json`，配色/阈值与 `cool watch` 完全一致，永不打架。
+
+```bash
+cd menubar && APP_NAME=Cooldown ./build-app.sh && open dist/Cooldown.app
+```
+
+需要 macOS 14+ 和已安装的 `cool`（`pipx install cooldown-my-mac`）。设计方案与完整说明见 [`menubar/README.md`](./menubar/README.md) 和 [`docs/menubar-design-spec.md`](./docs/menubar-design-spec.md)。
+
 ## 实现细节
 
 两个常被问到的内部机制——展开看：
