@@ -273,8 +273,7 @@ struct CoreLoadChart: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity)
-        .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).stroke(Theme.cardStroke, lineWidth: 0.5))
+        .cardSurface()
     }
 }
 
@@ -356,7 +355,6 @@ struct RankBars: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity)
-        .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).stroke(Theme.cardStroke, lineWidth: 0.5))
+        .cardSurface()
     }
 }

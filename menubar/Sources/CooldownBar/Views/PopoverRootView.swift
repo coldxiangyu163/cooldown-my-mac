@@ -1,4 +1,29 @@
 import SwiftUI
+import AppKit
+
+// MenuBarExtra(.window) hosts the popover in an opaque panel, so the system
+// material can never sample the desktop behind it — .regularMaterial degrades
+// to its flat base tint. Clearing the window background is what turns the
+// backdrop into real frosted glass. Window-level only; never touches layout
+// (the constraint-cycle crashes came from layout mutations, not chrome).
+private struct WindowGlassConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        DispatchQueue.main.async { configure(v.window) }
+        return v
+    }
+
+    // Re-assert on updates: AppKit can recreate/reset the panel between opens.
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { configure(nsView.window) }
+    }
+
+    private func configure(_ window: NSWindow?) {
+        guard let window, window.isOpaque else { return }
+        window.isOpaque = false
+        window.backgroundColor = .clear
+    }
+}
 
 struct PopoverRootView: View {
     let store: StatusStore
@@ -21,7 +46,7 @@ struct PopoverRootView: View {
                         // Pure overlay — never affects layout / window size.
                         .overlay(alignment: .bottom) {
                             LinearGradient(
-                                colors: [Theme.surface.opacity(0), Theme.surface.opacity(0.85)],
+                                colors: [Theme.surface.opacity(0), Theme.surface.opacity(0.55)],
                                 startPoint: .top, endPoint: .bottom
                             )
                             .frame(height: 24)
@@ -44,10 +69,12 @@ struct PopoverRootView: View {
         .frame(width: Theme.popoverWidth)
         // Control-Center style backing: system material for the frosted depth,
         // plus a faint adaptive surface tint so cards keep their hairline
-        // separation in both appearances. No forced color scheme — Theme
-        // surfaces resolve per-appearance.
-        .background(Theme.surface.opacity(0.35))
+        // separation in both appearances. Tint stays low — the translucent
+        // cards rely on the desktop blur showing through. No forced color
+        // scheme — Theme surfaces resolve per-appearance.
+        .background(Theme.surface.opacity(0.18))
         .background(.regularMaterial)
+        .background(WindowGlassConfigurator())
         .overlay(alignment: .bottom) {
             if let p = runner.pending {
                 ConfirmChip(runner: runner, pending: p)

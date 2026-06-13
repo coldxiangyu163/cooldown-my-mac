@@ -53,21 +53,36 @@ struct StatusDot: View {
     var body: some View { Circle().fill(color).frame(width: size, height: size) }
 }
 
-// .ultraThinMaterial card with a hairline bezel.
+// Shared card backing: translucent fill over the window material, top light
+// catch, hairline bezel, and a soft drop. Every full-width card (Card,
+// CoreLoadChart, RankBars) routes through here so elevation stays one level.
+// The shadow lives on the background shape — never on the view itself, which
+// would shadow the text too.
+extension View {
+    func cardSurface(radius: CGFloat = Theme.cardRadius) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        return background(
+            shape.fill(Theme.panel)
+                .shadow(color: Theme.cardShadow, radius: 5, y: 2)
+        )
+        .overlay(shape.strokeBorder(Theme.cardTopHighlight, lineWidth: 0.5))
+        .overlay(shape.stroke(Theme.cardStroke, lineWidth: 0.5))
+    }
+}
+
+// Translucent glass card. The optional tint sits between content and glass so
+// state washes (e.g. on-fire red) show through the fill instead of hiding
+// behind it.
 struct Card<Content: View>: View {
     var tint: Color? = nil
     @ViewBuilder var content: Content
     var body: some View {
         content
-            .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
             .background(
                 RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
                     .fill(tint ?? .clear)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                    .stroke(Theme.cardStroke, lineWidth: 0.5)
-            )
+            .cardSurface()
     }
 }
 

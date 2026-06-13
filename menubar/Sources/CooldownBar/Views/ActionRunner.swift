@@ -165,6 +165,9 @@ struct ConfirmChip: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        // Floats over scrolling rows: the now-translucent panel alone would let
+        // them bleed into the prompt text, so back it with its own material.
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.amber.opacity(0.45), lineWidth: 1))
         .shadow(color: Theme.cardShadow, radius: 12, y: 5)
         .padding(.horizontal, Theme.outerPad)

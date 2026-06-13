@@ -49,14 +49,21 @@ enum Theme {
     // to ~2.7:1 on the dark panels; these keep 10pt labels ≥4.5:1 everywhere.
     static let faint = Color(lightHex: 0x6E6E76, darkHex: 0x9898A0)
 
-    // Adaptive surfaces — Control Center look in both appearances: cards float
-    // on a softly tinted base with hairline borders + a faint shadow. Light is
-    // white-on-gray; dark is graphite cards (0x2A2A2E) on near-black (0x1C1C20).
-    static let surface = Color(lightHex: 0xECECEF, darkHex: 0x1C1C20)  // popover base (behind cards)
-    static let panel = Color(lightHex: 0xFFFFFF, darkHex: 0x2A2A2E)   // card fill
+    // Adaptive surfaces — Control Center recipe: cards are *translucent white*
+    // over the window material (light: milky glass; dark: white at ~7% — never
+    // opaque graphite) so the frosted backdrop reads through every tile.
+    static let surface = Color(lightHex: 0xECECEF, darkHex: 0x1C1C20)  // popover base tint (behind cards)
+    static let panel = Color(lightHex: 0xFFFFFF, darkHex: 0xFFFFFF, lightAlpha: 0.62, darkAlpha: 0.07)  // card fill
     static let cardStroke = Color(lightHex: 0x000000, darkHex: 0xFFFFFF, lightAlpha: 0.06, darkAlpha: 0.08)
     static let cardShadow = Color(lightHex: 0x000000, darkHex: 0x000000, lightAlpha: 0.07, darkAlpha: 0.45)
-    static let cardFill = Color(lightHex: 0xFFFFFF, darkHex: 0x2A2A2E)
+
+    // Top "light catch" on each card — the inset highlight that makes the
+    // translucent fill read as glass instead of fog. Near-invisible in light
+    // mode by design; carries the depth cue in dark mode.
+    static let cardTopHighlight = LinearGradient(
+        colors: [Color.white.opacity(0.12), .clear],
+        startPoint: .top, endPoint: .center
+    )
 
     // Subtle cool→warm wash so the backdrop isn't a flat gray; dark variant
     // keeps the same hue drift at graphite luminance.
